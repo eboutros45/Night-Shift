@@ -21,11 +21,11 @@ const FONT = "Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif";
 const DISPLAY = "'Archivo Narrow','Arial Narrow','Helvetica Neue',Helvetica,Arial,sans-serif";
 
 export async function buildTicketsEmail(target: Db, orderId: string) {
-  const order = target.select().from(orders).where(eq(orders.id, orderId)).get();
+  const order = (await target.select().from(orders).where(eq(orders.id, orderId)).limit(1))[0];
   if (!order) throw new Error(`order ${orderId} not found`);
-  const event = target.select().from(events).where(eq(events.id, order.eventId)).get()!;
-  const waveName = order.waveId ? (target.select({ name: waves.name }).from(waves).where(eq(waves.id, order.waveId)).get()?.name ?? null) : null;
-  const list = target.select().from(tickets).where(eq(tickets.orderId, orderId)).orderBy(asc(tickets.createdAt)).all();
+  const event = (await target.select().from(events).where(eq(events.id, order.eventId)).limit(1))[0]!;
+  const waveName = order.waveId ? ((await target.select({ name: waves.name }).from(waves).where(eq(waves.id, order.waveId)).limit(1))[0]?.name ?? null) : null;
+  const list = (await target.select().from(tickets).where(eq(tickets.orderId, orderId)).orderBy(asc(tickets.createdAt)));
   const tier = orderTier(order, waveName);
   const when = `${fmtDayLong(event.startsAt)}, doors ${fmtHourMin(event.startsAt)}`;
   const where = [event.venueName, event.venueAddress, event.city].filter(Boolean).join(", ");

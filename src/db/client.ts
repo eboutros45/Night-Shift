@@ -1,66 +1,55 @@
-// Opens SQLite, applies migrations from drizzle/, and hands out the shared handle.
-// Tests swap in a fresh in-memory database with useDatabase(openDatabase(":memory:")).
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import Database from "better-sqlite3";
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { config } from "../config.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Pool } from "pg";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
 import * as schema from "./schema.ts";
 
-export type Db = BetterSQLite3Database<typeof schema>;
+export type Db = NodePgDatabase<typeof schema>;
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-/** Anything that can run queries: the db itself or an open transaction. */
 export type Exec = Db | Tx;
-
-const MIGRATIONS = resolve(import.meta.dirname, "../../drizzle");
-
-export function openDatabase(path: string): Db {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-  const sqlite = new Database(path);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-  sqlite.pragma("busy_timeout = 5000");
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: MIGRATIONS });
-  return db;
+type Hook = () => void | Promise<void>;
+const databases = new AsyncLocalStorage<Db>();
+const transactions = new AsyncLocalStorage<{ transaction: Tx; hooks: Hook[] }>();
+let local: Db | undefined;
+export function openDatabase(connectionString: string) {
+  const pool = new Pool({ connectionString, max: 3, connectionTimeoutMillis: 10000 });
+  return { database: drizzle(pool, { schema }), close: () => pool.end() };
 }
-
-let current: Db | null = null;
-
+export function useDatabase(database: Db) { local = database; }
+const requestTasks = new AsyncLocalStorage<Set<Promise<void>>>();
+export function withDatabase<T>(database: Db, fn: () => T): T { return databases.run(database, () => requestTasks.run(new Set(), fn)); }
 export function db(): Db {
-  current ??= openDatabase(config.databasePath);
-  return current;
+  const scoped = databases.getStore() ?? local;
+  if (scoped) return scoped;
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+  local = openDatabase(process.env.DATABASE_URL).database;
+  return local;
 }
-
-export function useDatabase(next: Db) {
-  current = next;
+const pending = new Set<Promise<void>>();
+function schedule(hook: Hook) {
+  const tasks = requestTasks.getStore() ?? pending;
+  const promise = Promise.resolve().then(hook).then(() => {}).catch(() => { console.error("Post-commit task failed"); }).finally(() => tasks.delete(promise));
+  tasks.add(promise);
 }
-
-// Side effects (emails) registered during a transaction run only if it commits.
-let pendingHooks: (() => void)[] | null = null;
-
-/** Run `fn` after the current transaction commits (dropped if it rolls back); outside a transaction, run soon. */
-export function afterCommit(fn: () => void) {
-  if (pendingHooks) pendingHooks.push(fn);
-  else setImmediate(fn);
+export function afterCommit(hook: Hook) {
+  const scope = transactions.getStore();
+  if (scope) scope.hooks.push(hook); else schedule(hook);
 }
-
-/**
- * better-sqlite3 transactions are synchronous: the callback must not await.
- * That is a feature here: nothing else can interleave between a stock check and the insert.
+export async function flushAfterCommit() {
+  const tasks = requestTasks.getStore() ?? pending;
+  while (tasks.size) await Promise.all([...tasks]);
+}
+/** Serialize writes across isolates, preserving the previous single-writer guarantees.
+ * Reads remain concurrent. The lock is automatically released on commit or rollback.
  */
-export function tx<T>(fn: (tx: Tx) => T): T {
-  if (pendingHooks) return db().transaction(fn); // nested: outer tx owns the hooks
-  pendingHooks = [];
-  try {
-    const result = db().transaction(fn, { behavior: "immediate" });
-    const hooks = pendingHooks;
-    pendingHooks = null;
-    for (const h of hooks) setImmediate(h);
-    return result;
-  } catch (err) {
-    pendingHooks = null;
-    throw err;
-  }
+export async function tx<T>(fn: (transaction: Tx) => T | Promise<T>): Promise<T> {
+  const parent = transactions.getStore();
+  if (parent) return fn(parent.transaction);
+  const hooks: Hook[] = [];
+  const result = await db().transaction(async (transaction) => {
+    await transaction.execute(sql`select pg_advisory_xact_lock(728410324)`);
+    return transactions.run({ transaction, hooks }, () => fn(transaction));
+  });
+  for (const hook of hooks) schedule(hook);
+  return result;
 }

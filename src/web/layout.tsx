@@ -617,9 +617,9 @@ export const Page: FC<PageProps> = ({ title, user, path = "", head, bodyClass, c
     </html>
   );
 
-const AdminShell: FC<PropsWithChildren<{ title: string; user: User; path: string; head?: Child }>> = ({ title, user, path, head, children }) => {
+const AdminShell: FC<PropsWithChildren<{ title: string; user: User; path: string; head?: Child }>> = async ({ title, user, path, head, children }) => {
   const isAdmin = user.role === "ADMIN";
-  const pending = isAdmin ? countByStatus(["PENDING_VERIFICATION"]) : 0;
+  const pending = isAdmin ? (await countByStatus(["PENDING_VERIFICATION"])) : 0;
   const link = (href: string, label: Child, exact = false) => {
     const on = exact ? path === href : path === href || path.startsWith(`${href}/`);
     return (

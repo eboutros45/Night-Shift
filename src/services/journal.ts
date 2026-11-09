@@ -20,29 +20,28 @@ export type Entry = {
   at?: number;
 };
 
-export function record(x: Exec, e: Entry) {
-  x.insert(journal)
-    .values({
-      at: e.at ?? now(),
-      actor: e.actor,
-      entityType: e.entityType,
-      entityId: e.entityId ?? null,
-      eventId: e.eventId ?? null,
-      action: e.action,
-      fromStatus: e.from ?? null,
-      toStatus: e.to ?? null,
-      data: e.data ? JSON.stringify(e.data) : null,
-    })
-    .run();
+export async function record(x: Exec, e: Entry) {
+  (await x.insert(journal)
+        .values({
+          at: e.at ?? now(),
+          actor: e.actor,
+          entityType: e.entityType,
+          entityId: e.entityId ?? null,
+          eventId: e.eventId ?? null,
+          action: e.action,
+          fromStatus: e.from ?? null,
+          toStatus: e.to ?? null,
+          data: e.data ? JSON.stringify(e.data) : null,
+        }).returning());
 }
 
 export type TimelineRow = JournalRow & { actorName: string; parsed: Record<string, unknown> | null };
 
-function withActorNames(rows: JournalRow[]): TimelineRow[] {
+async function withActorNames(rows: JournalRow[]): Promise<TimelineRow[]> {
   const ids = [...new Set(rows.map((r) => r.actor).filter((a) => a !== "customer" && a !== "system"))];
   const names = new Map(
     ids.length
-      ? db().select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids)).all().map((u) => [u.id, u.name])
+      ? (await db().select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids))).map((u) => [u.id, u.name])
       : [],
   );
   return rows.map((r) => ({
@@ -53,42 +52,40 @@ function withActorNames(rows: JournalRow[]): TimelineRow[] {
 }
 
 /** Everything that happened to an order and its tickets, oldest first. */
-export function orderTimeline(orderId: string, ticketIds: string[]) {
+export async function orderTimeline(orderId: string, ticketIds: string[]) {
   const isOrder = and(eq(journal.entityType, "order"), eq(journal.entityId, orderId));
   const where = ticketIds.length
     ? or(isOrder, and(eq(journal.entityType, "ticket"), inArray(journal.entityId, ticketIds)))
     : isOrder;
-  return withActorNames(db().select().from(journal).where(where).orderBy(journal.id).all());
+  return (await withActorNames((await db().select().from(journal).where(where).orderBy(journal.id))));
 }
 
-export function entityTimeline(entityType: Entry["entityType"], entityId: string) {
-  return withActorNames(
-    db()
-      .select()
-      .from(journal)
-      .where(and(eq(journal.entityType, entityType), eq(journal.entityId, entityId)))
-      .orderBy(journal.id)
-      .all(),
-  );
+export async function entityTimeline(entityType: Entry["entityType"], entityId: string) {
+  return (await withActorNames(
+      (await db()
+              .select()
+              .from(journal)
+              .where(and(eq(journal.entityType, entityType), eq(journal.entityId, entityId)))
+              .orderBy(journal.id)),
+    ));
 }
 
 export type FeedFilter = { eventId?: string; entityType?: string; entityId?: string; action?: string; before?: number; limit?: number };
 
 /** Newest first, for /admin/trace. `before` is a journal id for paging. */
-export function feed(f: FeedFilter = {}) {
+export async function feed(f: FeedFilter = {}) {
   const conds: SQL[] = [];
   if (f.eventId) conds.push(eq(journal.eventId, f.eventId));
   if (f.entityType) conds.push(eq(journal.entityType, f.entityType));
   if (f.entityId) conds.push(eq(journal.entityId, f.entityId));
   if (f.action) conds.push(eq(journal.action, f.action));
   if (f.before) conds.push(lt(journal.id, f.before));
-  return withActorNames(
-    db()
-      .select()
-      .from(journal)
-      .where(conds.length ? and(...conds) : undefined)
-      .orderBy(desc(journal.id))
-      .limit(Math.min(f.limit ?? 100, 500))
-      .all(),
-  );
+  return (await withActorNames(
+      (await db()
+              .select()
+              .from(journal)
+              .where(conds.length ? and(...conds) : undefined)
+              .orderBy(desc(journal.id))
+              .limit(Math.min(f.limit ?? 100, 500))),
+    ));
 }

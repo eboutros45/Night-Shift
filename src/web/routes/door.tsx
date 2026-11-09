@@ -45,35 +45,34 @@ const Result: FC<{ o?: ScanOutcome }> = ({ o }) => (
   </div>
 );
 
-door.get("/", (c) => {
-  const upcoming = db()
-    .select()
-    .from(eventsT)
-    .where(gt(eventsT.startsAt, now() - 24 * 3600_000))
-    .orderBy(asc(eventsT.startsAt))
-    .all();
+door.get("/", async (c) => {
+  const upcoming = (await db()
+      .select()
+      .from(eventsT)
+      .where(gt(eventsT.startsAt, now() - 24 * 3600_000))
+      .orderBy(asc(eventsT.startsAt)));
   return c.html(
     <Page title="Door" user={c.get("user")} path="/admin/door">
       <h1>Door</h1>
       <p class="sub">Pick the event you are scanning for.</p>
       <div class="grid">
-        {upcoming.map((e) => {
-          const n = doorCounts(e.id);
-          return (
-            <a class="card ecard" href={`/admin/door/${e.id}`}>
-              <h2 style="margin:0">{e.title}</h2>
-              <p class="small muted" style="margin:4px 0 8px">
-                {fmtDate(e.startsAt)}, {e.venueName}
-              </p>
-              <span>
-                <strong>{n.checkedIn}</strong> / {n.total} checked in
-              </span>
-              <p class="small muted" style="margin:6px 0 0">
-                {e.doorPriceCents === null ? "No walk-in sales" : `Walk-ins ${money(e.doorPriceCents)} cash`}
-              </p>
-            </a>
-          );
-        })}
+        {(await Promise.all(upcoming.map(async (e) => {
+                        const n = (await doorCounts(e.id));
+                        return (
+                          <a class="card ecard" href={`/admin/door/${e.id}`}>
+                            <h2 style="margin:0">{e.title}</h2>
+                            <p class="small muted" style="margin:4px 0 8px">
+                              {fmtDate(e.startsAt)}, {e.venueName}
+                            </p>
+                            <span>
+                              <strong>{n.checkedIn}</strong> / {n.total} checked in
+                            </span>
+                            <p class="small muted" style="margin:6px 0 0">
+                              {e.doorPriceCents === null ? "No walk-in sales" : `Walk-ins ${money(e.doorPriceCents)} cash`}
+                            </p>
+                          </a>
+                        );
+                      })))}
       </div>
       {upcoming.length === 0 && <Empty>No upcoming events.</Empty>}
     </Page>,
@@ -83,8 +82,8 @@ door.get("/", (c) => {
 type User = Env["Variables"]["user"];
 
 /** Event title, Scan / Walk-ins switch, and the "inside" count. Shared by both modes. */
-function DoorHeader({ eventId, title, mode }: { eventId: string; title: string; mode: "scan" | "walk-in" }) {
-  const counts = doorCounts(eventId);
+async function DoorHeader({ eventId, title, mode }: { eventId: string; title: string; mode: "scan" | "walk-in" }) {
+  const counts = (await doorCounts(eventId));
   return (
     <>
       <div class="spread" style="margin-bottom:12px">
@@ -113,8 +112,8 @@ function DoorHeader({ eventId, title, mode }: { eventId: string; title: string; 
   );
 }
 
-function ScanPage({ eventId, title, user, o }: { eventId: string; title: string; user: User; o?: ScanOutcome }) {
-  const recent = feed({ eventId, action: "SCAN", limit: 15 });
+async function ScanPage({ eventId, title, user, o }: { eventId: string; title: string; user: User; o?: ScanOutcome }) {
+  const recent = (await feed({ eventId, action: "SCAN", limit: 15 }));
   return (
     <Page title={`Door | ${title}`} user={user} path="/admin/door" head={<script src="/static/html5-qrcode.min.js" defer></script>}>
       <div style="max-width:560px;margin:0 auto">
@@ -161,7 +160,7 @@ door.get("/:eventId", async (c) => {
 door.post("/:eventId", async (c) => {
   const ev = await getEvent(c.req.param("eventId"));
   if (!ev) return c.notFound();
-  const o = checkIn(ev.id, (await form(c)).code ?? "", c.get("user").id);
+  const o = (await checkIn(ev.id, (await form(c)).code ?? "", c.get("user").id));
   return c.html(<ScanPage eventId={ev.id} title={ev.title} user={c.get("user")} o={o} />);
 });
 
@@ -169,14 +168,14 @@ door.post("/:eventId/scan.json", async (c) => {
   const ev = await getEvent(c.req.param("eventId"));
   if (!ev) return c.json({ error: "not found" }, 404);
   const { code } = await c.req.json<{ code?: string }>();
-  const o = checkIn(ev.id, String(code ?? ""), c.get("user").id);
-  return c.json({ ...o, message: describe(o), counts: doorCounts(ev.id) });
+  const o = (await checkIn(ev.id, String(code ?? ""), c.get("user").id));
+  return c.json({ ...o, message: describe(o), counts: (await doorCounts(ev.id)) });
 });
 
 // ---------- walk-ins (cash at the door) ----------
 
-function WalkInPage({ eventId, user, ok, err }: { eventId: string; user: User; ok?: string; err?: string }) {
-  const s = doorSales.summary(eventId)!;
+async function WalkInPage({ eventId, user, ok, err }: { eventId: string; user: User; ok?: string; err?: string }) {
+  const s = (await doorSales.summary(eventId))!;
   const mine = s.byStaff.find((r) => r.staffId === user.id);
   const maxQty = Math.max(1, Math.min(20, s.left ?? 20));
   return (
@@ -321,7 +320,7 @@ door.post("/:eventId/walk-in", async (c) => {
   const parsed = doorSaleInput.safeParse(await form(c));
   if (!parsed.success) return back(c, to, { err: Object.values(fieldErrors(parsed.error)).join(" ") });
   try {
-    const o = doorSales.sell(ev.id, parsed.data, c.get("user").id);
+    const o = (await doorSales.sell(ev.id, parsed.data, c.get("user").id));
     return back(c, to, { ok: `Logged ${o.quantity} walk-in${o.quantity === 1 ? "" : "s"}: ${money(o.totalCents)} cash. They're checked in.` });
   } catch (e) {
     if (e instanceof DomainError) return back(c, to, { err: e.message });
@@ -334,7 +333,7 @@ door.post("/:eventId/walk-in/:orderId/void", async (c) => {
   const parsed = voidInput.safeParse(await form(c));
   if (!parsed.success) return back(c, to, { err: Object.values(fieldErrors(parsed.error)).join(" ") });
   try {
-    const r = doorSales.voidSale(c.req.param("orderId"), parsed.data.reason, c.get("user").id);
+    const r = (await doorSales.voidSale(c.req.param("orderId"), parsed.data.reason, c.get("user").id));
     return back(c, to, { ok: r.alreadyVoided ? "That sale was already voided." : `Sale voided: ${money(r.totalCents)} taken off tonight's cash. If it was a refund, hand the cash back.` });
   } catch (e) {
     if (e instanceof DomainError) return back(c, to, { err: e.message });

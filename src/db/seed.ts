@@ -9,19 +9,18 @@ import * as events from "../services/events.ts";
 import { db } from "./client.ts";
 import { users } from "./schema.ts";
 
-if (db().select({ id: users.id }).from(users).get()) {
+if ((await db().select({ id: users.id }).from(users).limit(1))[0]) {
   console.log("Already seeded. Use `npm run db:reset` to start over.");
   process.exit(0);
 }
 
 const adminId = newId();
-db()
+(await db()
   .insert(users)
   .values([
     { id: adminId, email: config.seed.adminEmail, name: "Admin", passwordHash: hashPassword(config.seed.adminPassword), role: "ADMIN" },
     { id: newId(), email: config.seed.scannerEmail, name: "Door", passwordHash: hashPassword(config.seed.scannerPassword), role: "SCANNER" },
-  ])
-  .run();
+  ]).execute());
 
 const inDays = (d: number, hhmm: string) => {
   const day = new Date(Date.now() + d * 86_400_000).toISOString().slice(0, 10);
@@ -46,7 +45,7 @@ const wave = (w: Partial<WaveInput> & Pick<WaveInput, "name" | "priceDollars" | 
   ...w,
 });
 
-const e1 = events.create(
+const e1 = (await events.create(
   {
     ...base,
     title: "Low Frequency",
@@ -66,15 +65,15 @@ const e1 = events.create(
     ],
   },
   adminId,
-);
-events.addWave(e1, wave({ name: "Early Bird", priceDollars: 15, capacity: 5, manualOpen: true }), adminId);
-events.addWave(e1, wave({ name: "Wave 1", priceDollars: 20, capacity: 40, mode: "AUTO" }), adminId);
-events.addWave(e1, wave({ name: "Wave 2", priceDollars: 25, capacity: 60, mode: "AUTO" }), adminId);
-events.addWave(e1, wave({ name: "Final Release", priceDollars: 30, capacity: 30, mode: "AUTO" }), adminId);
-events.addWave(e1, wave({ name: "VIP", priceDollars: 60, capacity: 20, manualOpen: true }), adminId);
-events.setPublished(e1, true, adminId);
+));
+(await events.addWave(e1, wave({ name: "Early Bird", priceDollars: 15, capacity: 5, manualOpen: true }), adminId));
+(await events.addWave(e1, wave({ name: "Wave 1", priceDollars: 20, capacity: 40, mode: "AUTO" }), adminId));
+(await events.addWave(e1, wave({ name: "Wave 2", priceDollars: 25, capacity: 60, mode: "AUTO" }), adminId));
+(await events.addWave(e1, wave({ name: "Final Release", priceDollars: 30, capacity: 30, mode: "AUTO" }), adminId));
+(await events.addWave(e1, wave({ name: "VIP", priceDollars: 60, capacity: 20, manualOpen: true }), adminId));
+(await events.setPublished(e1, true, adminId));
 
-const e2 = events.create(
+const e2 = (await events.create(
   {
     ...base,
     title: "Neon Tide",
@@ -89,11 +88,11 @@ const e2 = events.create(
     lineup: [{ time: "19:00", name: "Tarek" }, { time: "21:30", name: "Lyne", role: "live" }, { time: "23:30", name: "Salma K" }],
   },
   adminId,
-);
-events.addWave(e2, wave({ name: "General", priceDollars: 20, capacity: 100, mode: "SCHEDULED", opensAt: inDays(2, "12:00") }), adminId);
-events.setPublished(e2, true, adminId);
+));
+(await events.addWave(e2, wave({ name: "General", priceDollars: 20, capacity: 100, mode: "SCHEDULED", opensAt: inDays(2, "12:00") }), adminId));
+(await events.setPublished(e2, true, adminId));
 
-const e3 = events.create(
+const e3 = (await events.create(
   {
     ...base,
     title: "Halloweekend",
@@ -107,16 +106,16 @@ const e3 = events.create(
     lineup: [{ name: "Ziad" }, { name: "Maya Saab" }, { name: "Odd Hours", role: "live" }],
   },
   adminId,
-);
-events.addWave(e3, wave({ name: "Wave 1", priceDollars: 25, capacity: 3, manualOpen: true }), adminId);
-events.addWave(e3, wave({ name: "Wave 2", priceDollars: 35, capacity: 50, mode: "AUTO" }), adminId);
-events.setPublished(e3, true, adminId);
+));
+(await events.addWave(e3, wave({ name: "Wave 1", priceDollars: 25, capacity: 3, manualOpen: true }), adminId));
+(await events.addWave(e3, wave({ name: "Wave 2", priceDollars: 35, capacity: 50, mode: "AUTO" }), adminId));
+(await events.setPublished(e3, true, adminId));
 
-const e4 = events.create(
+const e4 = (await events.create(
   { ...base, title: "Sunset Society", slug: "sunset-society", description: "Not announced yet.", startsAt: inDays(40, "17:00"), endsAt: null, venueName: "Beach Club", lineup: [] },
   adminId,
-);
-events.addWave(e4, wave({ name: "Presale", priceDollars: 30, capacity: 80 }), adminId);
+));
+(await events.addWave(e4, wave({ name: "Presale", priceDollars: 30, capacity: 80 }), adminId));
 
 console.log(`Seeded.
   admin:   ${config.seed.adminEmail} / ${config.seed.adminPassword}

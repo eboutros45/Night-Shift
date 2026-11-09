@@ -23,8 +23,8 @@ import { Countdown, Empty, FieldErr, Flash, Flyer, Page } from "../layout.tsx";
 
 export const pub = new Hono();
 
-function view(c: Context, type: ViewType, eventId?: string) {
-  track({ type, eventId, ip: clientIp(c), ua: c.req.header("user-agent") ?? "", path: c.req.path, referrer: c.req.header("referer") });
+async function view(c: Context, type: ViewType, eventId?: string) {
+  (await track({ type, eventId, ip: clientIp(c), ua: c.req.header("user-agent") ?? "", path: c.req.path, referrer: c.req.header("referer") }));
 }
 
 const acts = (e: Event) => events.lineupOf(e).map((l) => l.name);
@@ -78,9 +78,9 @@ const Icon = {
 
 // ---------- home ----------
 
-pub.get("/", (c) => {
-  view(c, "PAGE_VIEW");
-  const list = events.listPublic();
+pub.get("/", async (c) => {
+  (await view(c, "PAGE_VIEW"));
+  const list = (await events.listPublic());
   const featured = list.find((e) => e.sale === "ON_SALE") ?? list[0];
   const rest = list.filter((e) => e !== featured);
   return c.html(
@@ -157,11 +157,11 @@ pub.get("/", (c) => {
 
 // ---------- event ----------
 
-pub.get("/e/:slug", (c) => {
-  const data = events.getPublic(c.req.param("slug"));
+pub.get("/e/:slug", async (c) => {
+  const data = (await events.getPublic(c.req.param("slug")));
   if (!data) return c.notFound();
   const { event, waves, sale, salesOpen } = data;
-  view(c, "EVENT_VIEW", event.id);
+  (await view(c, "EVENT_VIEW", event.id));
   const lineup = events.lineupOf(event);
   const buyable = salesOpen ? waves.filter((w) => w.state === "ON_SALE") : [];
   const first = buyable[0];
@@ -343,7 +343,7 @@ const Summary: FC<{ event: Event; wave?: WaveView | null; waveName?: string; qty
 );
 
 function CheckoutPage(props: {
-  data: NonNullable<ReturnType<typeof events.getPublic>>;
+  data: NonNullable<Awaited<ReturnType<typeof events.getPublic>>>;
   wave: WaveView;
   values: Record<string, string>;
   errors?: Record<string, string>;
@@ -401,19 +401,19 @@ function CheckoutPage(props: {
   );
 }
 
-pub.get("/e/:slug/checkout", (c) => {
+pub.get("/e/:slug/checkout", async (c) => {
   const slug = c.req.param("slug");
-  const data = events.getPublic(slug);
+  const data = (await events.getPublic(slug));
   if (!data) return c.notFound();
   const wave = data.waves.find((w) => w.id === (c.req.query("wave") ?? "") && w.state === "ON_SALE");
   if (!wave || !data.salesOpen) return c.redirect(`/e/${slug}#tickets`, 303);
-  view(c, "CHECKOUT_START", data.event.id);
+  (await view(c, "CHECKOUT_START", data.event.id));
   return c.html(<CheckoutPage data={data} wave={wave} values={{ quantity: c.req.query("quantity") ?? "1" }} />);
 });
 
 pub.post("/e/:slug/checkout", async (c) => {
   const slug = c.req.param("slug");
-  const data = events.getPublic(slug);
+  const data = (await events.getPublic(slug));
   if (!data) return c.notFound();
   const body = await c.req.parseBody();
   const values = Object.fromEntries(Object.entries(body).filter(([, v]) => typeof v === "string")) as Record<string, string>;
@@ -422,14 +422,14 @@ pub.post("/e/:slug/checkout", async (c) => {
   const parsed = checkoutInput.safeParse(values);
   if (!parsed.success) return c.html(<CheckoutPage data={data} wave={wave} values={values} errors={fieldErrors(parsed.error)} />, 400);
   try {
-    limits.take("checkoutPerIp", clientIp(c));
-    limits.take("checkoutPerEmail", parsed.data.customerEmail);
-    const order = orders.reserve(slug, parsed.data);
+    (await limits.take("checkoutPerIp", clientIp(c)));
+    (await limits.take("checkoutPerEmail", parsed.data.customerEmail));
+    const order = (await orders.reserve(slug, parsed.data));
     return c.redirect(`/o/${order.accessToken}`, 303);
   } catch (e) {
     if (!(e instanceof DomainError)) throw e;
     retryAfter(c, e);
-    return c.html(<CheckoutPage data={events.getPublic(slug)!} wave={wave} values={values} err={e.message} />, e.status);
+    return c.html(<CheckoutPage data={(await events.getPublic(slug))!} wave={wave} values={values} err={e.message} />, e.status);
   }
 });
 
@@ -445,7 +445,7 @@ const STEP_OF: Record<OrderStatus, { at: number; failed?: string }> = {
 };
 
 pub.get("/o/:token", async (c) => {
-  const o = orders.getByToken(c.req.param("token"));
+  const o = (await orders.getByToken(c.req.param("token")));
   if (!o) return c.notFound();
   const { order, event, wave, status } = o;
   const whishQr = status === "AWAITING_PAYMENT" ? await qrSvg(config.whish.link) : "";
@@ -604,8 +604,8 @@ pub.post("/o/:token/proof", async (c) => {
   const token = c.req.param("token");
   try {
     // Limits are checked before the body is read, so a blocked client can't make us parse uploads.
-    limits.take("proofPerIp", clientIp(c));
-    limits.take("proofPerOrder", token);
+    (await limits.take("proofPerIp", clientIp(c)));
+    (await limits.take("proofPerOrder", token));
   } catch (e) {
     retryAfter(c, e);
     return c.redirect(`/o/${token}?err=${encodeURIComponent((e as Error).message)}`, 303);
@@ -625,7 +625,7 @@ pub.post("/o/:token/proof", async (c) => {
 // ---------- tickets ----------
 
 pub.get("/o/:token/tickets", async (c) => {
-  const o = orders.getByToken(c.req.param("token"));
+  const o = (await orders.getByToken(c.req.param("token")));
   if (!o || o.status !== "APPROVED") return c.notFound();
   const svgs = await Promise.all(o.tickets.map((t) => qrSvg(t.token)));
   const tier = orderTier(o.order, o.wave?.name);
@@ -684,7 +684,7 @@ pub.get("/o/:token/tickets", async (c) => {
 });
 
 pub.get("/o/:token/tickets.pdf", async (c) => {
-  const o = orders.getByToken(c.req.param("token"));
+  const o = (await orders.getByToken(c.req.param("token")));
   if (!o || o.status !== "APPROVED") return c.notFound();
   const pdf = await ticketsPdf(o.order, o.event, o.tickets, o.wave?.name);
   return c.body(new Uint8Array(pdf), 200, {

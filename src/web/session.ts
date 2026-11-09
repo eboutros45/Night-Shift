@@ -6,6 +6,10 @@ import { config } from "../config.ts";
 import type { User } from "../db/schema.ts";
 import type { Role } from "../domain/status.ts";
 import { getUser } from "../services/users.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const accessUsers = new AsyncLocalStorage<User>();
+export const withAccessUser = <T>(user: User, fn: () => T): T => accessUsers.run(user, fn);
 
 const COOKIE = "ns_session";
 const TTL_MS = 12 * 3600_000;
@@ -25,12 +29,14 @@ export async function startSession(c: Context, user: User) {
 export const endSession = (c: Context) => deleteCookie(c, COOKIE, { path: "/" });
 
 export async function currentUser(c: Context): Promise<User | null> {
+  const verified = accessUsers.getStore();
+  if (verified) return verified;
   const v = await getSignedCookie(c, config.sessionSecret, COOKIE);
   if (!v) return null;
   const [id, exp] = v.split(".");
   // Real time, not the dev clock: time-travelling must not log you out.
   if (!id || !exp || Number(exp) < Date.now()) return null;
-  return getUser(id);
+  return (await getUser(id));
 }
 
 /** Gate a route group. Scanners only reach the door; admins reach everything. */

@@ -3,34 +3,34 @@
 //  - statuses are plain text, validated by src/domain/status.ts
 //  - wave stock is NOT stored; it is derived from orders (see services/inventory.ts)
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, bigint, boolean, pgTable, serial, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 const id = () => text("id").primaryKey();
-const createdAt = () => integer("created_at").notNull().default(sql`(unixepoch() * 1000)`);
+const createdAt = () => bigint("created_at", { mode: "number" }).notNull().default(sql`(extract(epoch from now()) * 1000)::bigint`);
 
-export const users = sqliteTable("users", {
+export const users = pgTable("users", {
   id: id(),
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   passwordHash: text("password_hash").notNull(),
   role: text("role").notNull(), // ADMIN | SCANNER
   createdAt: createdAt(),
-});
+}).enableRLS();
 
-export const events = sqliteTable("events", {
+export const events = pgTable("events", {
   id: id(),
   slug: text("slug").notNull().unique(),
   title: text("title").notNull(),
   subtitle: text("subtitle"),
   organizer: text("organizer").notNull().default("Night Shift"),
   description: text("description").notNull().default(""),
-  startsAt: integer("starts_at").notNull(),
-  endsAt: integer("ends_at"),
+  startsAt: bigint("starts_at", { mode: "number" }).notNull(),
+  endsAt: bigint("ends_at", { mode: "number" }),
   venueName: text("venue_name").notNull(),
   venueAddress: text("venue_address").notNull().default(""),
   city: text("city").notNull().default("Beirut"),
   lineup: text("lineup").notNull().default("[]"), // JSON: [{ name, role?, time? }]
-  published: integer("published", { mode: "boolean" }).notNull().default(false),
+  published: boolean("published").notNull().default(false),
   maxPerOrder: integer("max_per_order").notNull().default(6),
   maxPerBuyer: integer("max_per_buyer").notNull().default(6), // across all of one person's orders for this event
   doorPriceCents: integer("door_price_cents"), // walk-in cash price; null = no walk-in sales
@@ -42,10 +42,10 @@ export const events = sqliteTable("events", {
   posterKey: text("poster_key"), // file name in storage/media
   theme: text("theme"), // JSON, filled during UI sweeps
   createdAt: createdAt(),
-  updatedAt: integer("updated_at").notNull().default(sql`(unixepoch() * 1000)`),
-});
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull().default(sql`(extract(epoch from now()) * 1000)::bigint`),
+}).enableRLS();
 
-export const waves = sqliteTable(
+export const waves = pgTable(
   "waves",
   {
     id: id(),
@@ -57,14 +57,14 @@ export const waves = sqliteTable(
     priceCents: integer("price_cents").notNull(),
     capacity: integer("capacity").notNull(),
     mode: text("mode").notNull().default("MANUAL"), // MANUAL | AUTO | SCHEDULED
-    manualOpen: integer("manual_open", { mode: "boolean" }).notNull().default(false),
-    opensAt: integer("opens_at"), // SCHEDULED: on sale from this time
-    closesAt: integer("closes_at"), // SCHEDULED: optional end of sale
+    manualOpen: boolean("manual_open").notNull().default(false),
+    opensAt: bigint("opens_at", { mode: "number" }), // SCHEDULED: on sale from this time
+    closesAt: bigint("closes_at", { mode: "number" }), // SCHEDULED: optional end of sale
   },
   (t) => [uniqueIndex("waves_event_position").on(t.eventId, t.position)],
-);
+).enableRLS();
 
-export const orders = sqliteTable(
+export const orders = pgTable(
   "orders",
   {
     id: id(),
@@ -78,17 +78,17 @@ export const orders = sqliteTable(
     quantity: integer("quantity").notNull(),
     unitPriceCents: integer("unit_price_cents").notNull(),
     totalCents: integer("total_cents").notNull(),
-    isComp: integer("is_comp", { mode: "boolean" }).notNull().default(false),
+    isComp: boolean("is_comp").notNull().default(false),
     channel: text("channel").notNull().default("ONLINE"), // ONLINE (Whish, verified) | DOOR (cash, logged by staff)
     customerName: text("customer_name").notNull(),
     customerEmail: text("customer_email").notNull(),
     customerPhone: text("customer_phone").notNull(),
-    expiresAt: integer("expires_at"), // only meaningful while AWAITING_PAYMENT
+    expiresAt: bigint("expires_at", { mode: "number" }), // only meaningful while AWAITING_PAYMENT
     proofKey: text("proof_key"), // file name in storage/proofs (never public)
     proofMime: text("proof_mime"),
     txnRef: text("txn_ref"),
-    submittedAt: integer("submitted_at"),
-    decidedAt: integer("decided_at"), // approve / reject / expire time
+    submittedAt: bigint("submitted_at", { mode: "number" }),
+    decidedAt: bigint("decided_at", { mode: "number" }), // approve / reject / expire time
     decidedBy: text("decided_by"), // user id, or "system" for expiry
     rejectReason: text("reject_reason"),
     createdAt: createdAt(),
@@ -98,9 +98,9 @@ export const orders = sqliteTable(
     index("orders_status_expires").on(t.status, t.expiresAt),
     index("orders_event_status").on(t.eventId, t.status),
   ],
-);
+).enableRLS();
 
-export const tickets = sqliteTable(
+export const tickets = pgTable(
   "tickets",
   {
     id: id(),
@@ -113,22 +113,22 @@ export const tickets = sqliteTable(
       .references(() => events.id, { onDelete: "cascade" }),
     attendeeName: text("attendee_name").notNull(),
     status: text("status").notNull().default("VALID"), // VALID | CHECKED_IN | REVOKED
-    checkedInAt: integer("checked_in_at"),
+    checkedInAt: bigint("checked_in_at", { mode: "number" }),
     checkedInBy: text("checked_in_by"),
-    revokedAt: integer("revoked_at"),
+    revokedAt: bigint("revoked_at", { mode: "number" }),
     revokeReason: text("revoke_reason"),
     createdAt: createdAt(),
   },
   (t) => [index("tickets_event_status").on(t.eventId, t.status), index("tickets_order").on(t.orderId)],
-);
+).enableRLS();
 
 // One stream for everything that happens: state changes, admin actions, door scans, emails.
 // Feeds every timeline and /admin/trace. Replaces the old AuditLog + ScanLog.
-export const journal = sqliteTable(
+export const journal = pgTable(
   "journal",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    at: integer("at").notNull(),
+    id: serial("id").primaryKey(),
+    at: bigint("at", { mode: "number" }).notNull(),
     actor: text("actor").notNull(), // user id | "customer" | "system"
     entityType: text("entity_type").notNull(), // order | ticket | event | wave | user | scan
     entityId: text("entity_id"),
@@ -143,14 +143,14 @@ export const journal = sqliteTable(
     index("journal_event_action").on(t.eventId, t.action, t.at),
     index("journal_at").on(t.at),
   ],
-);
+).enableRLS();
 
 // First-party analytics. No cookies, no personal data: visitor = hash(ip, ua, day, secret).
-export const pageViews = sqliteTable(
+export const pageViews = pgTable(
   "page_views",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    at: integer("at").notNull(),
+    id: serial("id").primaryKey(),
+    at: bigint("at", { mode: "number" }).notNull(),
     type: text("type").notNull(), // PAGE_VIEW | EVENT_VIEW | CHECKOUT_START
     eventId: text("event_id"),
     visitor: text("visitor").notNull(),
@@ -159,7 +159,7 @@ export const pageViews = sqliteTable(
     device: text("device").notNull(), // mobile | tablet | desktop
   },
   (t) => [index("page_views_type_at").on(t.type, t.at), index("page_views_event").on(t.eventId, t.type)],
-);
+).enableRLS();
 
 export type User = typeof users.$inferSelect;
 export type Event = typeof events.$inferSelect;
@@ -167,3 +167,11 @@ export type Wave = typeof waves.$inferSelect;
 export type Order = typeof orders.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;
 export type JournalRow = typeof journal.$inferSelect;
+
+// Shared across Worker isolates; keys are hashed, never raw emails or IP addresses.
+export const rateLimits = pgTable("rate_limits", {
+  id: text("id").primaryKey(),
+  n: integer("n").notNull().default(0),
+  resetAt: bigint("reset_at", { mode: "number" }).notNull(),
+  reported: boolean("reported").notNull().default(false),
+}).enableRLS();

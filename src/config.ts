@@ -16,6 +16,7 @@ export const config = {
   // Only trust X-Forwarded-For when a reverse proxy we control sets it; otherwise clients can fake their IP.
   trustProxy: env.TRUST_PROXY === "1",
   storageDir: env.STORAGE_DIR ?? "storage",
+  supabase: { url: env.SUPABASE_URL ?? "", secretKey: env.SUPABASE_SECRET_KEY ?? "" },
   uploadLimitBytes: 5 * 1024 * 1024,
   brand: { name: "Night Shift", orderPrefix: "NS", currency: "USD", supportEmail: env.SUPPORT_EMAIL || fromAddress || smtpUserAddress || "tickets@nightshift.local" },
   whish: {
@@ -25,7 +26,8 @@ export const config = {
   },
   email: {
     // console = print only (default, safe for dev) | smtp = really send (Resend, Mailpit, Gmail...)
-    provider: (env.EMAIL_PROVIDER === "smtp" ? "smtp" : "console") as "console" | "smtp",
+    provider: (env.EMAIL_PROVIDER === "resend" ? "resend" : env.EMAIL_PROVIDER === "smtp" ? "smtp" : "console") as "resend" | "smtp" | "console",
+    resendKey: env.RESEND_API_KEY ?? "",
     from: env.EMAIL_FROM || (smtpUserAddress ? `Night Shift <${smtpUserAddress}>` : "Night Shift <tickets@nightshift.local>"),
     smtp: {
       host: env.SMTP_HOST ?? "smtp.gmail.com",

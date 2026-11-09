@@ -46,9 +46,9 @@ const Bars: FC<{ rows: { key: string | null; n: number }[]; title: string }> = (
   );
 };
 
-insights.get("/analytics", (c) => {
+insights.get("/analytics", async (c) => {
   const days = Math.min(365, Math.max(1, Number(c.req.query("days")) || 30));
-  const s = siteStats(days);
+  const s = (await siteStats(days));
   return c.html(
     <Page title="Analytics" user={c.get("user")} path="/admin/analytics">
       <div class="head">
@@ -86,15 +86,15 @@ insights.get("/analytics", (c) => {
   );
 });
 
-insights.get("/events/:id/stats", (c) => {
-  const data = events.getAdmin(c.req.param("id"));
+insights.get("/events/:id/stats", async (c) => {
+  const data = (await events.getAdmin(c.req.param("id")));
   if (!data) return c.notFound();
-  const s = eventStats(data.event.id);
+  const s = (await eventStats(data.event.id));
   const sold = s.byWave.reduce((n, w) => n + Number(w.sold ?? 0), 0);
   const revenue = s.byWave.reduce((n, w) => n + Number(w.revenue ?? 0), 0);
   const capacity = s.byWave.reduce((n, w) => n + w.capacity, 0);
   const admitted = s.scans.find((r) => r.result === "ADMITTED")?.n ?? 0;
-  const walkIns = doorSales.summary(data.event.id)!;
+  const walkIns = (await doorSales.summary(data.event.id))!;
   return c.html(
     <Page title={`Stats | ${data.event.title}`} user={c.get("user")} path="/admin">
       <p class="small">
@@ -189,11 +189,11 @@ insights.get("/events/:id/stats", (c) => {
   );
 });
 
-insights.get("/trace", (c) => {
+insights.get("/trace", async (c) => {
   const q = (k: string) => c.req.query(k) || undefined;
   const f = { eventId: q("event"), entityType: q("type"), entityId: q("id"), action: q("action"), before: Number(q("before")) || undefined };
-  const rows = feed({ ...f, limit: 200 });
-  const evs = events.listAdmin();
+  const rows = (await feed({ ...f, limit: 200 }));
+  const evs = (await events.listAdmin());
   const link = (p: Record<string, string | undefined>) =>
     "?" +
     new URLSearchParams(
@@ -313,7 +313,7 @@ insights.post("/dev/clock", async (c) => {
   const m = (await form(c)).minutes;
   if (m === "reset") resetClock();
   else advanceClock(Math.max(0, Number(m) || 0) * 60_000);
-  const expired = sweepExpired();
+  const expired = (await sweepExpired());
   return back(c, "/admin/trace", {
     ok: `Clock ${m === "reset" ? "reset to real time" : `moved +${m} min`}. ${expired} hold(s) expired and recorded.`,
   });
@@ -321,15 +321,14 @@ insights.post("/dev/clock", async (c) => {
 
 // ---------- email settings / diagnostics ----------
 
-insights.get("/email", (c) => {
+insights.get("/email", async (c) => {
   const e = config.email;
-  const recent = db()
-    .select()
-    .from(journal)
-    .where(like(journal.action, "EMAIL_%"))
-    .orderBy(desc(journal.id))
-    .limit(30)
-    .all();
+  const recent = (await db()
+      .select()
+      .from(journal)
+      .where(like(journal.action, "EMAIL_%"))
+      .orderBy(desc(journal.id))
+      .limit(30));
   return c.html(
     <Page title="Email" user={c.get("user")} path="/admin/email">
       <h1>Email</h1>
@@ -431,18 +430,18 @@ insights.post("/email/test", async (c) => {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return back(c, "/admin/email", { err: "Enter a valid email address." });
   const user = c.get("user");
   try {
-    limits.take("testEmailPerUser", user.id);
+    (await limits.take("testEmailPerUser", user.id));
   } catch (e) {
     return back(c, "/admin/email", { err: (e as Error).message });
   }
-  queue(db(), {
-    template: "test",
-    to,
-    subject: `${config.brand.name} test email`,
-    text: `This is a test from ${config.brand.name}, sent by ${user.name}. If you can read it, email delivery works.`,
-    entityType: "user",
-    entityId: user.id,
-  });
+  (await queue(db(), {
+        template: "test",
+        to,
+        subject: `${config.brand.name} test email`,
+        text: `This is a test from ${config.brand.name}, sent by ${user.name}. If you can read it, email delivery works.`,
+        entityType: "user",
+        entityId: user.id,
+      }));
   await flushMail();
   return back(c, "/admin/email", { ok: `Test sent to ${to}. Check the table below for SENT or FAILED.` });
 });

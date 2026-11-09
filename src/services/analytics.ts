@@ -21,113 +21,103 @@ export function visitorId(ip: string, ua: string, at = now()) {
   return createHash("sha256").update(`${config.sessionSecret}|${day}|${ip}|${ua}`).digest("base64url").slice(0, 16);
 }
 
-export function track(v: { type: ViewType; eventId?: string | null; ip: string; ua: string; path: string; referrer?: string | null }) {
+export async function track(v: { type: ViewType; eventId?: string | null; ip: string; ua: string; path: string; referrer?: string | null }) {
   if (/bot|crawl|spider|preview/i.test(v.ua)) return;
   let referrerHost: string | null = null;
   try {
     referrerHost = v.referrer ? new URL(v.referrer).host : null;
   } catch {}
   if (referrerHost && config.appUrl.includes(referrerHost)) referrerHost = null; // internal navigation
-  db()
-    .insert(pageViews)
-    .values({
-      at: now(),
-      type: v.type,
-      eventId: v.eventId ?? null,
-      visitor: visitorId(v.ip, v.ua),
-      path: v.path.slice(0, 200),
-      referrerHost,
-      device: deviceOf(v.ua),
-    })
-    .run();
+  (await db()
+        .insert(pageViews)
+        .values({
+          at: now(),
+          type: v.type,
+          eventId: v.eventId ?? null,
+          visitor: visitorId(v.ip, v.ua),
+          path: v.path.slice(0, 200),
+          referrerHost,
+          device: deviceOf(v.ua),
+        }).returning());
 }
 
-export function siteStats(days = 30) {
+export async function siteStats(days = 30) {
   const since = now() - days * 86_400_000;
   const inRange = gte(pageViews.at, since);
-  const totals = db()
-    .select({ views: count(), visitors: countDistinct(pageViews.visitor) })
-    .from(pageViews)
-    .where(inRange)
-    .get()!;
-  const byDay = db()
-    .select({
-      day: sql<string>`strftime('%Y-%m-%d', ${pageViews.at} / 1000, 'unixepoch')`,
-      views: count(),
-      visitors: countDistinct(pageViews.visitor),
-    })
-    .from(pageViews)
-    .where(inRange)
-    .groupBy(sql`1`)
-    .orderBy(desc(sql`1`))
-    .all();
-  const top = <K extends "path" | "referrerHost" | "device">(k: K) =>
-    db()
-      .select({ key: pageViews[k], n: count() })
+  const totals = (await db()
+      .select({ views: count(), visitors: countDistinct(pageViews.visitor) })
       .from(pageViews)
-      .where(and(inRange, isNotNull(pageViews[k])))
-      .groupBy(pageViews[k])
-      .orderBy(desc(count()))
-      .limit(10)
-      .all();
-  return { days, totals, byDay, pages: top("path"), referrers: top("referrerHost"), devices: top("device") };
+      .where(inRange).limit(1))[0]!;
+  const byDay = (await db()
+      .select({
+        day: sql<string>`to_char(to_timestamp(${pageViews.at} / 1000.0) at time zone 'UTC', 'YYYY-MM-DD')`,
+        views: count(),
+        visitors: countDistinct(pageViews.visitor),
+      })
+      .from(pageViews)
+      .where(inRange)
+      .groupBy(sql`1`)
+      .orderBy(desc(sql`1`)));
+  const top = async <K extends "path" | "referrerHost" | "device">(k: K) =>
+    (await db()
+            .select({ key: pageViews[k], n: count() })
+            .from(pageViews)
+            .where(and(inRange, isNotNull(pageViews[k])))
+            .groupBy(pageViews[k])
+            .orderBy(desc(count()))
+            .limit(10));
+  return { days, totals, byDay, pages: (await top("path")), referrers: (await top("referrerHost")), devices: (await top("device")) };
 }
 
-export function eventStats(eventId: string) {
-  const views = (type: ViewType) =>
-    db()
-      .select({ n: countDistinct(pageViews.visitor) })
-      .from(pageViews)
-      .where(and(eq(pageViews.eventId, eventId), eq(pageViews.type, type)))
-      .get()!.n;
-  const journalCount = (action: string) =>
-    db().select({ n: count() }).from(journal).where(and(eq(journal.eventId, eventId), eq(journal.action, action))).get()!.n;
+export async function eventStats(eventId: string) {
+  const views = async (type: ViewType) =>
+    (await db()
+            .select({ n: countDistinct(pageViews.visitor) })
+            .from(pageViews)
+            .where(and(eq(pageViews.eventId, eventId), eq(pageViews.type, type))).limit(1))[0]!.n;
+  const journalCount = async (action: string) =>
+    (await db().select({ n: count() }).from(journal).where(and(eq(journal.eventId, eventId), eq(journal.action, action))).limit(1))[0]!.n;
 
   const funnel = [
-    { step: "Visitors on event page", n: views("EVENT_VIEW") },
-    { step: "Visitors who opened checkout", n: views("CHECKOUT_START") },
-    { step: "Orders created", n: journalCount("ORDER_CREATED") },
-    { step: "Payment proofs submitted", n: journalCount("PROOF_SUBMITTED") },
-    { step: "Orders approved", n: journalCount("ORDER_APPROVED") },
+    { step: "Visitors on event page", n: (await views("EVENT_VIEW")) },
+    { step: "Visitors who opened checkout", n: (await views("CHECKOUT_START")) },
+    { step: "Orders created", n: (await journalCount("ORDER_CREATED")) },
+    { step: "Payment proofs submitted", n: (await journalCount("PROOF_SUBMITTED")) },
+    { step: "Orders approved", n: (await journalCount("ORDER_APPROVED")) },
   ];
 
-  const byStatus = db()
-    .select({ status: orders.status, orders: count(), tickets: sum(orders.quantity), cents: sum(orders.totalCents) })
-    .from(orders)
-    .where(and(eq(orders.eventId, eventId), eq(orders.isComp, false)))
-    .groupBy(orders.status)
-    .all();
+  const byStatus = (await db()
+      .select({ status: orders.status, orders: count(), tickets: sum(orders.quantity), cents: sum(orders.totalCents) })
+      .from(orders)
+      .where(and(eq(orders.eventId, eventId), eq(orders.isComp, false)))
+      .groupBy(orders.status));
 
-  const byWave = db()
-    .select({ wave: waves.name, price: waves.priceCents, capacity: waves.capacity, sold: sum(orders.quantity), revenue: sum(orders.totalCents) })
-    .from(waves)
-    .leftJoin(orders, and(eq(orders.waveId, waves.id), eq(orders.status, "APPROVED")))
-    .where(eq(waves.eventId, eventId))
-    .groupBy(waves.id)
-    .orderBy(waves.position)
-    .all();
+  const byWave = (await db()
+      .select({ wave: waves.name, price: waves.priceCents, capacity: waves.capacity, sold: sum(orders.quantity), revenue: sum(orders.totalCents) })
+      .from(waves)
+      .leftJoin(orders, and(eq(orders.waveId, waves.id), eq(orders.status, "APPROVED")))
+      .where(eq(waves.eventId, eventId))
+      .groupBy(waves.id)
+      .orderBy(waves.position));
 
-  const comps = db()
-    .select({ n: sum(orders.quantity) })
-    .from(orders)
-    .where(and(eq(orders.eventId, eventId), eq(orders.isComp, true)))
-    .get()!.n;
+  const comps = (await db()
+      .select({ n: sum(orders.quantity) })
+      .from(orders)
+      .where(and(eq(orders.eventId, eventId), eq(orders.isComp, true))).limit(1))[0]!.n;
 
-  const scans = db()
-    .select({ result: sql<string>`json_extract(${journal.data}, '$.result')`, n: count() })
-    .from(journal)
-    .where(and(eq(journal.eventId, eventId), eq(journal.action, "SCAN")))
-    .groupBy(sql`1`)
-    .all();
+  const scans = (await db()
+      .select({ result: sql<string>`(${journal.data}::jsonb ->> 'result')`, n: count() })
+      .from(journal)
+      .where(and(eq(journal.eventId, eventId), eq(journal.action, "SCAN")))
+      .groupBy(sql`1`));
 
   // Check-ins per 15 minutes; slot is epoch ms of the slot start (formatted in Beirut time by the UI).
-  const arrivals = db()
-    .select({ slot: sql<number>`(${tickets.checkedInAt} / 900000) * 900000`, n: count() })
-    .from(tickets)
-    .where(and(eq(tickets.eventId, eventId), isNotNull(tickets.checkedInAt)))
-    .groupBy(sql`1`)
-    .orderBy(sql`1`)
-    .all();
+  const arrivals = (await db()
+      .select({ slot: sql<number>`(${tickets.checkedInAt} / 900000) * 900000`, n: count() })
+      .from(tickets)
+      .where(and(eq(tickets.eventId, eventId), isNotNull(tickets.checkedInAt)))
+      .groupBy(sql`1`)
+      .orderBy(sql`1`));
 
   return { funnel, byStatus, byWave, comps: Number(comps ?? 0), scans, arrivals };
 }

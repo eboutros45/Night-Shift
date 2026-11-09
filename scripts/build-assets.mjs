@@ -1,0 +1,10 @@
+import { mkdir, cp } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+const require = createRequire(import.meta.url);
+await mkdir("dist/assets/static", { recursive: true });
+await mkdir("dist/assets/fonts", { recursive: true });
+await cp("public", "dist/assets", { recursive: true });
+await cp(require.resolve("html5-qrcode/html5-qrcode.min.js"), "dist/assets/static/html5-qrcode.min.js");
+const fonts = join(dirname(require.resolve("@fontsource-variable/archivo/package.json")), "files");
+for (const file of ["archivo-latin-wdth-normal.woff2", "archivo-latin-ext-wdth-normal.woff2"]) await cp(join(fonts, file), `dist/assets/fonts/${file}`);

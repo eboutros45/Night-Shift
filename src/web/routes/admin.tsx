@@ -54,15 +54,15 @@ admin.post("/login", async (c) => {
   const email = parsed.success ? parsed.data.email : "";
   try {
     // Per network, and per account: failures on one email are capped even if spread over many IPs.
-    limits.take("loginPerIp", clientIp(c));
-    if (email) limits.check("loginFailuresPerEmail", email);
+    (await limits.take("loginPerIp", clientIp(c)));
+    if (email) (await limits.check("loginFailuresPerEmail", email));
   } catch (e) {
     retryAfter(c, e);
     return back(c, "/admin/login", { err: (e as Error).message });
   }
-  const user = parsed.success ? authenticate(email, parsed.data.password) : null;
+  const user = parsed.success ? (await authenticate(email, parsed.data.password)) : null;
   if (!user) {
-    if (email) limits.hit("loginFailuresPerEmail", email);
+    if (email) (await limits.hit("loginFailuresPerEmail", email));
     return back(c, "/admin/login", { err: "Wrong email or password." });
   }
   await startSession(c, user);
@@ -77,10 +77,10 @@ admin.post("/logout", (c) => {
 
 // ---------- dashboard ----------
 
-admin.get("/", (c) => {
-  const list = events.listAdmin();
-  const pending = orders.countByStatus(["PENDING_VERIFICATION"]);
-  const awaiting = orders.countByStatus(["AWAITING_PAYMENT"]);
+admin.get("/", async (c) => {
+  const list = (await events.listAdmin());
+  const pending = (await orders.countByStatus(["PENDING_VERIFICATION"]));
+  const awaiting = (await orders.countByStatus(["AWAITING_PAYMENT"]));
   const issued = list.reduce((n, e) => n + e.ticketsIssued, 0);
   return c.html(
     <Page title="Events" user={c.get("user")} path="/admin">
@@ -341,14 +341,14 @@ function WaveFields({ w, held }: { w?: Partial<WaveView>; held?: number }) {
   );
 }
 
-function EventPage(props: {
+async function EventPage(props: {
   c: { get: (k: "user") => Env["Variables"]["user"] };
   id: string;
   v?: Record<string, string>;
   e?: Record<string, string>;
   msg: { ok?: string; err?: string };
 }) {
-  const { event: ev, waves } = events.getAdmin(props.id)!;
+  const { event: ev, waves } = (await events.getAdmin(props.id))!;
   const base = `/admin/events/${ev.id}`;
   const held = waves.reduce((n, w) => n + w.held, 0);
   const cap = waves.reduce((n, w) => n + w.capacity, 0);
@@ -521,8 +521,8 @@ function EventPage(props: {
   );
 }
 
-admin.get("/events/:id", (c) => {
-  if (!events.getAdmin(c.req.param("id"))) return c.notFound();
+admin.get("/events/:id", async (c) => {
+  if (!(await events.getAdmin(c.req.param("id")))) return c.notFound();
   return c.html(<EventPage c={c} id={c.req.param("id")} msg={flash(c)} />);
 });
 
@@ -532,18 +532,18 @@ admin.post("/events/:id", async (c) => {
   const parsed = eventInput.safeParse(f);
   if (!parsed.success)
     return c.html(<EventPage c={c} id={id} v={f} e={fieldErrors(parsed.error)} msg={{ err: "Fix the highlighted fields." }} />, 400);
-  return act(c, `/admin/events/${id}`, () => events.update(id, parsed.data, c.get("user").id), "Saved.");
+  return (await act(c, `/admin/events/${id}`, async () => (await events.update(id, parsed.data, c.get("user").id)), "Saved."));
 });
 
 admin.post("/events/:id/publish", async (c) => {
   const id = c.req.param("id");
   const on = (await form(c)).published === "1";
-  return act(c, `/admin/events/${id}`, () => events.setPublished(id, on, c.get("user").id), on ? "Published. It's live on the site." : "Unpublished.");
+  return (await act(c, `/admin/events/${id}`, async () => (await events.setPublished(id, on, c.get("user").id)), on ? "Published. It's live on the site." : "Unpublished."));
 });
 
-admin.post("/events/:id/duplicate", (c) => {
+admin.post("/events/:id/duplicate", async (c) => {
   try {
-    const newId = events.duplicate(c.req.param("id"), c.get("user").id);
+    const newId = (await events.duplicate(c.req.param("id"), c.get("user").id));
     return back(c, `/admin/events/${newId}`, { ok: "Copied as a draft. Adjust the date and slug, then publish." });
   } catch (e) {
     if (e instanceof DomainError) return back(c, `/admin/events/${c.req.param("id")}`, { err: e.message });
@@ -554,67 +554,67 @@ admin.post("/events/:id/duplicate", (c) => {
 admin.post("/events/:id/poster", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.parseBody();
-  return act(
-    c,
-    `/admin/events/${id}`,
-    async () => {
-      if (!(body.poster instanceof File)) throw new DomainError("NO_FILE", "Choose an image.");
-      const { key } = await saveUpload("media", body.poster);
-      events.setPoster(id, key, c.get("user").id);
-    },
-    "Poster updated.",
-  );
+  return (await act(
+      c,
+      `/admin/events/${id}`,
+      async () => {
+        if (!(body.poster instanceof File)) throw new DomainError("NO_FILE", "Choose an image.");
+        const { key } = await saveUpload("media", body.poster);
+        (await events.setPoster(id, key, c.get("user").id));
+      },
+      "Poster updated.",
+    ));
 });
 
 admin.post("/events/:id/waves", async (c) => {
   const id = c.req.param("id");
   const parsed = waveInput.safeParse(await form(c));
   if (!parsed.success) return back(c, `/admin/events/${id}`, { err: Object.values(fieldErrors(parsed.error)).join(" ") });
-  return act(c, `/admin/events/${id}`, () => events.addWave(id, parsed.data, c.get("user").id), "Wave added.");
+  return (await act(c, `/admin/events/${id}`, async () => (await events.addWave(id, parsed.data, c.get("user").id)), "Wave added."));
 });
 
-const waveEvent = (waveId: string) => db().select({ eventId: wavesT.eventId }).from(wavesT).where(eq(wavesT.id, waveId)).get()?.eventId;
+const waveEvent = async (waveId: string) => (await db().select({ eventId: wavesT.eventId }).from(wavesT).where(eq(wavesT.id, waveId)).limit(1))[0]?.eventId;
 
 admin.post("/waves/:id", async (c) => {
   const id = c.req.param("id");
-  const eventId = waveEvent(id);
+  const eventId = (await waveEvent(id));
   if (!eventId) return c.notFound();
   const parsed = waveInput.safeParse(await form(c));
   if (!parsed.success) return back(c, `/admin/events/${eventId}`, { err: Object.values(fieldErrors(parsed.error)).join(" ") });
-  return act(c, `/admin/events/${eventId}`, () => events.updateWave(id, parsed.data, c.get("user").id), "Wave saved.");
+  return (await act(c, `/admin/events/${eventId}`, async () => (await events.updateWave(id, parsed.data, c.get("user").id)), "Wave saved."));
 });
 
 admin.post("/waves/:id/open", async (c) => {
   const id = c.req.param("id");
-  const eventId = waveEvent(id);
+  const eventId = (await waveEvent(id));
   if (!eventId) return c.notFound();
   const open = (await form(c)).open === "1";
-  return act(c, `/admin/events/${eventId}`, () => events.setWaveOpen(id, open, c.get("user").id), open ? "Sales opened." : "Sales closed.");
+  return (await act(c, `/admin/events/${eventId}`, async () => (await events.setWaveOpen(id, open, c.get("user").id)), open ? "Sales opened." : "Sales closed."));
 });
 
 admin.post("/waves/:id/move", async (c) => {
   const id = c.req.param("id");
-  const eventId = waveEvent(id);
+  const eventId = (await waveEvent(id));
   if (!eventId) return c.notFound();
   const dir = (await form(c)).dir === "-1" ? -1 : 1;
-  return act(c, `/admin/events/${eventId}`, () => events.moveWave(id, dir, c.get("user").id), "Wave moved.");
+  return (await act(c, `/admin/events/${eventId}`, async () => (await events.moveWave(id, dir, c.get("user").id)), "Wave moved."));
 });
 
-admin.post("/waves/:id/delete", (c) => {
+admin.post("/waves/:id/delete", async (c) => {
   const id = c.req.param("id");
-  const eventId = waveEvent(id);
+  const eventId = (await waveEvent(id));
   if (!eventId) return c.notFound();
-  return act(c, `/admin/events/${eventId}`, () => events.deleteWave(id, c.get("user").id), "Wave deleted.");
+  return (await act(c, `/admin/events/${eventId}`, async () => (await events.deleteWave(id, c.get("user").id)), "Wave deleted."));
 });
 
-admin.get("/events/:id/attendees", (c) => {
-  const data = events.getAdmin(c.req.param("id"));
+admin.get("/events/:id/attendees", async (c) => {
+  const data = (await events.getAdmin(c.req.param("id")));
   if (!data) return c.notFound();
   const ev = data.event;
   const state = (["in", "out", "revoked"] as const).find((s) => s === c.req.query("state"));
   const q = c.req.query("q") ?? "";
-  const rows = attendees.list(ev.id, { q, state });
-  const n = attendees.counts(ev.id);
+  const rows = (await attendees.list(ev.id, { q, state }));
+  const n = (await attendees.counts(ev.id));
   const chip = (s: typeof state, label: string, count: number) => {
     const p = new URLSearchParams(Object.entries({ state: s, q }).filter(([, v]) => v) as [string, string][]);
     return (
@@ -705,18 +705,17 @@ admin.get("/events/:id/attendees", (c) => {
   );
 });
 
-admin.get("/events/:id/attendees.csv", (c) => {
+admin.get("/events/:id/attendees.csv", async (c) => {
   const id = c.req.param("id");
-  const ev = db().select().from(eventsT).where(eq(eventsT.id, id)).get();
+  const ev = (await db().select().from(eventsT).where(eq(eventsT.id, id)).limit(1))[0];
   if (!ev) return c.notFound();
-  const rows = db()
-    .select({ t: ticketsT, o: ordersT, wave: wavesT.name })
-    .from(ticketsT)
-    .innerJoin(ordersT, eq(ordersT.id, ticketsT.orderId))
-    .leftJoin(wavesT, eq(wavesT.id, ordersT.waveId))
-    .where(eq(ticketsT.eventId, id))
-    .orderBy(ticketsT.attendeeName)
-    .all();
+  const rows = (await db()
+      .select({ t: ticketsT, o: ordersT, wave: wavesT.name })
+      .from(ticketsT)
+      .innerJoin(ordersT, eq(ordersT.id, ticketsT.orderId))
+      .leftJoin(wavesT, eq(wavesT.id, ordersT.waveId))
+      .where(eq(ticketsT.eventId, id))
+      .orderBy(ticketsT.attendeeName));
   // Prefix formula-looking cells so spreadsheet apps never execute them.
   const cell = (v: unknown) => {
     let s = v == null ? "" : String(v);
@@ -737,9 +736,9 @@ admin.get("/events/:id/attendees.csv", (c) => {
 
 // ---------- payments queue ----------
 
-admin.get("/payments", (c) => {
+admin.get("/payments", async (c) => {
   const eventId = c.req.query("event") || undefined;
-  const list = orders.list({ status: "PENDING_VERIFICATION", eventId }).reverse(); // oldest first: fair queue
+  const list = (await orders.list({ status: "PENDING_VERIFICATION", eventId })).reverse(); // oldest first: fair queue
   const at = now();
   return c.html(
     <Page title="Payments" user={c.get("user")} path="/admin/payments">
@@ -826,10 +825,10 @@ admin.get("/payments", (c) => {
 
 // ---------- orders ----------
 
-admin.get("/orders", (c) => {
+admin.get("/orders", async (c) => {
   const f = { status: c.req.query("status") || undefined, eventId: c.req.query("event") || undefined, q: c.req.query("q") || undefined };
-  const list = orders.list(f);
-  const evs = events.listAdmin();
+  const list = (await orders.list(f));
+  const evs = (await events.listAdmin());
   const chip = (status: string | undefined, label: string) => {
     const p = new URLSearchParams(Object.entries({ status, event: f.eventId, q: f.q }).filter(([, v]) => v) as [string, string][]);
     return (
@@ -911,8 +910,8 @@ admin.get("/orders", (c) => {
   );
 });
 
-admin.get("/orders/:id", (c) => {
-  const o = orders.getById(c.req.param("id"));
+admin.get("/orders/:id", async (c) => {
+  const o = (await orders.getById(c.req.param("id")));
   if (!o) return c.notFound();
   const { order, event, wave, status } = o;
   const base = `/admin/orders/${order.id}`;
@@ -1053,7 +1052,7 @@ admin.get("/orders/:id", (c) => {
 });
 
 admin.get("/orders/:id/proof", async (c) => {
-  const o = db().select({ key: ordersT.proofKey }).from(ordersT).where(eq(ordersT.id, c.req.param("id"))).get();
+  const o = (await db().select({ key: ordersT.proofKey }).from(ordersT).where(eq(ordersT.id, c.req.param("id"))).limit(1))[0];
   const f = o?.key ? await readStored("proofs", o.key) : null;
   if (!f) return c.notFound();
   return c.body(new Uint8Array(f.buf), 200, { "content-type": f.mime, "cache-control": "private, no-store", "x-content-type-options": "nosniff" });
@@ -1066,7 +1065,7 @@ admin.post("/orders/:id/approve", async (c) => {
   const id = c.req.param("id");
   const to = afterAction(await form(c), id);
   try {
-    const r = orders.approve(id, c.get("user").id);
+    const r = (await orders.approve(id, c.get("user").id));
     return back(c, to, { ok: r.alreadyApproved ? "Already approved; nothing changed." : "Approved. Tickets issued and emailed." });
   } catch (e) {
     if (e instanceof DomainError) return back(c, to, { err: e.message });
@@ -1077,34 +1076,34 @@ admin.post("/orders/:id/approve", async (c) => {
 admin.post("/orders/:id/reject", async (c) => {
   const id = c.req.param("id");
   const f = await form(c);
-  return act(c, afterAction(f, id), () => orders.reject(id, c.get("user").id, f.reason ?? ""), "Rejected. Customer notified; tickets back on sale.");
+  return (await act(c, afterAction(f, id), async () => (await orders.reject(id, c.get("user").id, f.reason ?? "")), "Rejected. Customer notified; tickets back on sale."));
 });
 
-admin.post("/orders/:id/resend", (c) => {
+admin.post("/orders/:id/resend", async (c) => {
   const id = c.req.param("id");
-  return act(
-    c,
-    `/admin/orders/${id}`,
-    () => {
-      limits.take("resendPerOrder", id); // Gmail allows ~500/day; don't let a stuck button burn it
-      orders.resendTickets(id, c.get("user").id);
-    },
-    "Tickets queued for sending. Watch the timeline for EMAIL_SENT.",
-  );
+  return (await act(
+      c,
+      `/admin/orders/${id}`,
+      async () => {
+        (await limits.take("resendPerOrder", id)); // Gmail allows ~500/day; don't let a stuck button burn it
+        (await orders.resendTickets(id, c.get("user").id));
+      },
+      "Tickets queued for sending. Watch the timeline for EMAIL_SENT.",
+    ));
 });
 
 admin.post("/tickets/:id/revoke", async (c) => {
   const id = c.req.param("id");
   const reason = (await form(c)).reason ?? "";
-  const t = db().select({ orderId: ticketsT.orderId }).from(ticketsT).where(eq(ticketsT.id, id)).get();
+  const t = (await db().select({ orderId: ticketsT.orderId }).from(ticketsT).where(eq(ticketsT.id, id)).limit(1))[0];
   if (!t) return c.notFound();
-  return act(c, `/admin/orders/${t.orderId}`, () => ticketsSvc.revoke(id, c.get("user").id, reason), "Ticket revoked.");
+  return (await act(c, `/admin/orders/${t.orderId}`, async () => (await ticketsSvc.revoke(id, c.get("user").id, reason)), "Ticket revoked."));
 });
 
 // ---------- comps ----------
 
-admin.get("/comps", (c) => {
-  const evs = events.listAdmin();
+admin.get("/comps", async (c) => {
+  const evs = (await events.listAdmin());
   return c.html(
     <Page title="Comps" user={c.get("user")} path="/admin/comps">
       <h1>Complimentary tickets</h1>
@@ -1151,7 +1150,7 @@ admin.post("/comps", async (c) => {
   const parsed = compInput.safeParse(await form(c));
   if (!parsed.success) return back(c, "/admin/comps", { err: Object.values(fieldErrors(parsed.error)).join(" ") });
   try {
-    const o = orders.createComp(parsed.data, c.get("user").id);
+    const o = (await orders.createComp(parsed.data, c.get("user").id));
     return back(c, `/admin/orders/${o.id}`, { ok: "Comps issued and emailed." });
   } catch (e) {
     if (e instanceof DomainError) return back(c, "/admin/comps", { err: e.message });

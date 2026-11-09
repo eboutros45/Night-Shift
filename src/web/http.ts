@@ -36,6 +36,8 @@ export const flash = (c: Context) => ({ ok: c.req.query("ok"), err: c.req.query(
 
 /** The caller's IP. X-Forwarded-For is ignored unless TRUST_PROXY=1 (it is trivially spoofable). */
 export function clientIp(c: Context) {
+  // Worker requests have already passed the signed Access-token gate.
+  if (process.env.CF_WORKER === "1") return c.req.header("CF-Connecting-IP") ?? "unknown";
   if (config.trustProxy) {
     const fwd = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
     if (fwd) return fwd;

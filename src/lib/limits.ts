@@ -1,7 +1,8 @@
-// Every rate limit in the app, in one table. Fixed-window counters held in memory: correct for
-// a single server process; move the Map to Redis/the DB if we ever run more than one.
-// Uses real time (Date.now), not the dev clock, so time travel can't unlock anything.
-import { db } from "../db/client.ts";
+// Shared PostgreSQL rate limits across Worker isolates.
+import { createHash } from "node:crypto";
+import { eq, lte } from "drizzle-orm";
+import { rateLimits } from "../db/schema.ts";
+import { db, tx } from "../db/client.ts";
 import { DomainError } from "../domain/status.ts";
 import { record } from "../services/journal.ts";
 
@@ -30,43 +31,27 @@ export class RateLimitError extends DomainError {
   }
 }
 
-const windows = new Map<string, { n: number; resetAt: number; reported: boolean }>();
 
-function current(policy: Policy, key: string) {
-  const t = Date.now();
-  const id = `${policy}:${key}`;
-  let w = windows.get(id);
-  if (!w || w.resetAt <= t) {
-    w = { n: 0, resetAt: t + LIMITS[policy].windowMs, reported: false };
-    windows.set(id, w);
-    if (windows.size > 20_000) for (const [k, v] of windows) if (v.resetAt <= t) windows.delete(k);
-  }
-  return w;
+async function apply(policy: Policy, key: string, mode: "check" | "hit" | "take") {
+  const at = Date.now();
+  const id = createHash("sha256").update(policy + ":" + key).digest("hex");
+  const blockedUntil = await tx(async (t) => {
+    await t.delete(rateLimits).where(lte(rateLimits.resetAt, at));
+    await t.insert(rateLimits).values({ id, n: 0, resetAt: at + LIMITS[policy].windowMs }).onConflictDoNothing();
+    const row = (await t.select().from(rateLimits).where(eq(rateLimits.id, id)).limit(1))[0]!;
+    if (mode !== "hit" && row.n >= LIMITS[policy].limit) {
+      if (!row.reported) {
+        await t.update(rateLimits).set({ reported: true }).where(eq(rateLimits.id, id));
+        await record(t, { actor: "system", entityType: "system", action: "RATE_LIMITED", data: { policy, limit: LIMITS[policy].limit } });
+      }
+      return row.resetAt;
+    }
+    if (mode !== "check") await t.update(rateLimits).set({ n: row.n + 1 }).where(eq(rateLimits.id, id));
+    return null;
+  });
+  if (blockedUntil !== null) throw new RateLimitError(policy, Math.max(1, Math.ceil((blockedUntil - at) / 1000)));
 }
-
-/** Throw if the window is already full (does not count this attempt). */
-export function check(policy: Policy, key: string) {
-  const w = current(policy, key);
-  if (w.n < LIMITS[policy].limit) return;
-  if (!w.reported) {
-    // Journal the first block per window only, so an attacker can't flood the trace.
-    w.reported = true;
-    try {
-      record(db(), { actor: "system", entityType: "system", action: "RATE_LIMITED", data: { policy, key, limit: LIMITS[policy].limit } });
-    } catch {}
-  }
-  throw new RateLimitError(policy, Math.max(1, Math.ceil((w.resetAt - Date.now()) / 1000)));
-}
-
-/** Count one attempt. */
-export function hit(policy: Policy, key: string) {
-  current(policy, key).n++;
-}
-
-/** Check, then count. The usual call. */
-export function take(policy: Policy, key: string) {
-  check(policy, key);
-  hit(policy, key);
-}
-
-export const _resetLimits = () => windows.clear();
+export async function check(policy: Policy, key: string) { await apply(policy, key, "check"); }
+export async function hit(policy: Policy, key: string) { await apply(policy, key, "hit"); }
+export async function take(policy: Policy, key: string) { await apply(policy, key, "take"); }
+export const _resetLimits = async () => { await db().delete(rateLimits); };

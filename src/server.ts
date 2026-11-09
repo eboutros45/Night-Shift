@@ -1,9 +1,10 @@
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { Hono } from "hono";
 import { createApp } from "./app.ts";
 import { config } from "./config.ts";
-import { db } from "./db/client.ts";
-
-db(); // open + migrate before accepting traffic
-serve({ fetch: createApp().fetch, port: config.port }, (info) => {
-  console.log(`Night Shift on http://localhost:${info.port}  (admin: /admin)`);
+const assets = new Hono();
+assets.use("*", serveStatic({ root: "./dist/assets" }));
+serve({ fetch: createApp(async (request) => assets.fetch(request)).fetch, port: config.port }, (info) => {
+  console.log(`Night Shift on http://localhost:${info.port} (admin: /admin)`);
 });

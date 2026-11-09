@@ -9,3 +9,8 @@ storage/media/*
 !storage/**/.gitkeep
 *.log
 data-backup/
+
+.migration-tools/
+.wrangler/
+.dev.vars*
+dist/

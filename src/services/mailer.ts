@@ -4,7 +4,7 @@
 // email (and every failure, with its error) shows up on the order timeline.
 import nodemailer, { type Transporter } from "nodemailer";
 import { config } from "../config.ts";
-import { afterCommit, db, type Db, type Exec } from "../db/client.ts";
+import { afterCommit, flushAfterCommit, db, type Db, type Exec } from "../db/client.ts";
 import { buildTicketsEmail } from "./ticket-email.ts";
 import { record, type Entry } from "./journal.ts";
 
@@ -37,7 +37,7 @@ function transporter() {
 }
 
 
-const inFlight = new Set<Promise<void>>();
+
 
 /** Send now and journal the outcome. `target` is the database the mail was queued against. */
 export async function deliver(m: Mail, target: Db = db()) {
@@ -47,7 +47,20 @@ export async function deliver(m: Mail, target: Db = db()) {
     const rich = m.attachTicketsFor ? await buildTicketsEmail(target, m.attachTicketsFor) : null;
     const attachments = rich?.attachments ?? [];
     let messageId: string | undefined;
-    if (config.email.provider === "smtp") {
+    if (config.email.provider === "resend") {
+      if (!config.email.resendKey) throw new Error("RESEND_API_KEY is required");
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${config.email.resendKey}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          from: config.email.from, reply_to: config.brand.supportEmail, to: [m.to], subject: m.subject, text: m.text, html: rich?.html,
+          attachments: attachments.map((a) => ({ filename: a.filename, content: a.content.toString("base64"), content_type: a.contentType, content_id: "cid" in a ? a.cid : undefined })),
+        }),
+      });
+      if (!response.ok) throw new Error(`Resend rejected email (${response.status})`);
+      messageId = (await response.json() as { id: string }).id;
+    } else if (config.email.provider === "smtp") {
       // Reply-To: buyers who hit "reply" reach a real inbox even if the From address has none.
       const info = await transporter().sendMail({ from: config.email.from, replyTo: config.brand.supportEmail, to: m.to, subject: m.subject, text: m.text, html: rich?.html, attachments });
       messageId = info.messageId;
@@ -55,43 +68,40 @@ export async function deliver(m: Mail, target: Db = db()) {
       const files = attachments.map((a) => `${a.filename} (${a.content.length} bytes)`).join(", ");
       console.log(`\n[email:${m.template}] to=${m.to}\n  ${m.subject}\n  ${m.text.replace(/\n/g, "\n  ")}${files ? `\n  attached: ${files}` : ""}\n`);
     }
-    record(target, {
-      ...base,
-      action: "EMAIL_SENT",
-      data: { template: m.template, to: m.to, provider: config.email.provider, attachments: attachments.map((a) => a.filename), messageId },
-    });
+    (await record(target, {
+            ...base,
+            action: "EMAIL_SENT",
+            data: { template: m.template, to: m.to, provider: config.email.provider, attachments: attachments.map((a) => a.filename), messageId },
+          }));
   } catch (err) {
     const error = (err as Error).message.slice(0, 300);
     console.error(`[email:${m.template}] FAILED to=${m.to}: ${error}`);
-    record(target, { ...base, action: "EMAIL_FAILED", data: { template: m.template, to: m.to, provider: config.email.provider, error } });
+    (await record(target, { ...base, action: "EMAIL_FAILED", data: { template: m.template, to: m.to, provider: config.email.provider, error } }));
   }
 }
 
 /** Record the email as queued (inside the caller's transaction) and send it after commit. */
-export function queue(x: Exec, m: Mail) {
-  record(x, {
-    actor: "system",
-    entityType: m.entityType,
-    entityId: m.entityId,
-    eventId: m.eventId ?? null,
-    action: "EMAIL_QUEUED",
-    data: { template: m.template, to: m.to, subject: m.subject, pdf: Boolean(m.attachTicketsFor) },
-  });
+export async function queue(x: Exec, m: Mail) {
+  (await record(x, {
+        actor: "system",
+        entityType: m.entityType,
+        entityId: m.entityId,
+        eventId: m.eventId ?? null,
+        action: "EMAIL_QUEUED",
+        data: { template: m.template, to: m.to, subject: m.subject, pdf: Boolean(m.attachTicketsFor) },
+      }));
   const target = db();
-  afterCommit(() => {
-    const p = deliver(m, target).finally(() => inFlight.delete(p));
-    inFlight.add(p);
-  });
+  afterCommit(async () => (await deliver(m, target)));
 }
 
 /** Wait for queued emails to finish (tests; graceful shutdown). */
 export async function flushMail() {
-  await new Promise((r) => setImmediate(r));
-  await Promise.all(inFlight);
+  await flushAfterCommit();
 }
 
 /** Log in to the SMTP server without sending anything. */
 export async function verifySmtp() {
+  if (config.email.provider === "resend") return { ok: Boolean(config.email.resendKey), detail: config.email.resendKey ? "Resend API key configured. Send a test email to verify delivery." : "RESEND_API_KEY is missing." };
   if (config.email.provider !== "smtp") return { ok: true, detail: "EMAIL_PROVIDER=console: emails are printed to the server console, nothing is sent." };
   try {
     await transporter().verify();

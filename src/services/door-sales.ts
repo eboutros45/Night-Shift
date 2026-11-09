@@ -16,151 +16,144 @@ import { record } from "./journal.ts";
 const isDoor = (eventId: string) => and(eq(orders.eventId, eventId), eq(orders.channel, "DOOR"));
 
 /** Walk-in tickets sold and not voided. */
-function soldAtDoor(x: Exec, eventId: string) {
-  const r = x
-    .select({ n: sum(orders.quantity) })
-    .from(orders)
-    .where(and(isDoor(eventId), eq(orders.status, "APPROVED")))
-    .get();
+async function soldAtDoor(x: Exec, eventId: string) {
+  const r = (await x
+      .select({ n: sum(orders.quantity) })
+      .from(orders)
+      .where(and(isDoor(eventId), eq(orders.status, "APPROVED"))).limit(1))[0];
   return Number(r?.n ?? 0);
 }
 
-function uniqueReference(x: Exec) {
+async function uniqueReference(x: Exec) {
   for (let i = 0; i < 10; i++) {
     const ref = orderReference();
-    if (!x.select({ id: orders.id }).from(orders).where(eq(orders.reference, ref)).get()) return ref;
+    if (!(await x.select({ id: orders.id }).from(orders).where(eq(orders.reference, ref)).limit(1))[0]) return ref;
   }
   throw new Error("Could not allocate an order reference");
 }
 
-export function sell(eventId: string, input: DoorSaleInput, actor: string, at = now()) {
-  return tx((t) => {
-    const event = t.select().from(events).where(eq(events.id, eventId)).get();
-    if (!event) throw new DomainError("EVENT_NOT_FOUND", "Event not found.", 404);
-    if (event.doorPriceCents === null)
-      throw new DomainError("DOOR_SALES_OFF", "Walk-in sales are off for this event. An admin needs to set a door price.", 409);
-    if (event.doorLimit !== null) {
-      const left = event.doorLimit - soldAtDoor(t, eventId);
-      if (input.quantity > left)
-        throw new DomainError("DOOR_LIMIT", left <= 0 ? "Walk-ins are sold out." : `Only ${left} walk-in ticket${left === 1 ? "" : "s"} left.`, 409);
-    }
+export async function sell(eventId: string, input: DoorSaleInput, actor: string, at = now()) {
+  return (await tx(async (t) => {
+      const event = (await t.select().from(events).where(eq(events.id, eventId)).limit(1))[0];
+      if (!event) throw new DomainError("EVENT_NOT_FOUND", "Event not found.", 404);
+      if (event.doorPriceCents === null)
+        throw new DomainError("DOOR_SALES_OFF", "Walk-in sales are off for this event. An admin needs to set a door price.", 409);
+      if (event.doorLimit !== null) {
+        const left = event.doorLimit - (await soldAtDoor(t, eventId));
+        if (input.quantity > left)
+          throw new DomainError("DOOR_LIMIT", left <= 0 ? "Walk-ins are sold out." : `Only ${left} walk-in ticket${left === 1 ? "" : "s"} left.`, 409);
+      }
 
-    const order: Order = {
-      id: newId(),
-      reference: uniqueReference(t),
-      accessToken: secretToken(),
-      eventId,
-      waveId: null,
-      status: "APPROVED",
-      channel: "DOOR",
-      quantity: input.quantity,
-      unitPriceCents: event.doorPriceCents,
-      totalCents: event.doorPriceCents * input.quantity,
-      isComp: false,
-      customerName: input.name,
-      customerEmail: "",
-      customerPhone: "",
-      expiresAt: null,
-      proofKey: null,
-      proofMime: null,
-      txnRef: null,
-      submittedAt: null,
-      decidedAt: at,
-      decidedBy: actor,
-      rejectReason: null,
-      createdAt: at,
-    };
-    t.insert(orders).values(order).run();
-    record(t, {
-      actor,
-      entityType: "order",
-      entityId: order.id,
-      eventId,
-      action: "DOOR_SALE",
-      to: "APPROVED",
-      at,
-      data: { reference: order.reference, quantity: order.quantity, totalCents: order.totalCents, payment: "CASH", name: order.customerName },
-    });
+      const order: Order = {
+        id: newId(),
+        reference: (await uniqueReference(t)),
+        accessToken: secretToken(),
+        eventId,
+        waveId: null,
+        status: "APPROVED",
+        channel: "DOOR",
+        quantity: input.quantity,
+        unitPriceCents: event.doorPriceCents,
+        totalCents: event.doorPriceCents * input.quantity,
+        isComp: false,
+        customerName: input.name,
+        customerEmail: "",
+        customerPhone: "",
+        expiresAt: null,
+        proofKey: null,
+        proofMime: null,
+        txnRef: null,
+        submittedAt: null,
+        decidedAt: at,
+        decidedBy: actor,
+        rejectReason: null,
+        createdAt: at,
+      };
+      (await t.insert(orders).values(order).returning());
+      (await record(t, {
+              actor,
+              entityType: "order",
+              entityId: order.id,
+              eventId,
+              action: "DOOR_SALE",
+              to: "APPROVED",
+              at,
+              data: { reference: order.reference, quantity: order.quantity, totalCents: order.totalCents, payment: "CASH", name: order.customerName },
+            }));
 
-    // Tickets exist so attendee lists, counts and exports stay complete; they start checked in.
-    for (let i = 0; i < order.quantity; i++) {
-      const id = newId();
-      t.insert(tickets)
-        .values({ id, token: secretToken(), orderId: order.id, eventId, attendeeName: order.customerName, status: "CHECKED_IN", checkedInAt: at, checkedInBy: actor, createdAt: at })
-        .run();
-      record(t, { actor, entityType: "ticket", entityId: id, eventId, action: "TICKET_ISSUED", to: "CHECKED_IN", at, data: { door: true } });
-    }
-    return order;
-  });
+      // Tickets exist so attendee lists, counts and exports stay complete; they start checked in.
+      for (let i = 0; i < order.quantity; i++) {
+        const id = newId();
+        (await t.insert(tickets)
+                  .values({ id, token: secretToken(), orderId: order.id, eventId, attendeeName: order.customerName, status: "CHECKED_IN", checkedInAt: at, checkedInBy: actor, createdAt: at }).returning());
+        (await record(t, { actor, entityType: "ticket", entityId: id, eventId, action: "TICKET_ISSUED", to: "CHECKED_IN", at, data: { door: true } }));
+      }
+      return order;
+    }));
 }
 
 /** Undo a door sale (wrong quantity, refund...). Its tickets are revoked; the cash leaves the totals. */
-export function voidSale(orderId: string, reason: string, actor: string, at = now()) {
+export async function voidSale(orderId: string, reason: string, actor: string, at = now()) {
   if (!reason.trim()) throw new DomainError("REASON_REQUIRED", "Give a reason for voiding.");
-  return tx((t) => {
-    const order = t.select().from(orders).where(eq(orders.id, orderId)).get();
-    if (!order) throw new DomainError("ORDER_NOT_FOUND", "Sale not found.", 404);
-    if (order.channel !== "DOOR") throw new DomainError("NOT_DOOR_SALE", "Only walk-in sales can be voided.", 409);
-    if (order.status === "VOIDED") return { alreadyVoided: true, totalCents: order.totalCents };
-    assertOrderTransition(order.status, "VOIDED");
-    const res = t
-      .update(orders)
-      .set({ status: "VOIDED" })
-      .where(and(eq(orders.id, orderId), eq(orders.status, "APPROVED")))
-      .run();
-    if (res.changes !== 1) return { alreadyVoided: true, totalCents: order.totalCents };
-    t.update(tickets)
-      .set({ status: "REVOKED", revokedAt: at, revokeReason: `Walk-in sale voided: ${reason.trim()}` })
-      .where(eq(tickets.orderId, orderId))
-      .run();
-    record(t, {
-      actor,
-      entityType: "order",
-      entityId: orderId,
-      eventId: order.eventId,
-      action: "DOOR_SALE_VOIDED",
-      from: "APPROVED",
-      to: "VOIDED",
-      at,
-      data: { reference: order.reference, reason: reason.trim(), quantity: order.quantity, totalCents: order.totalCents, soldBy: order.decidedBy },
-    });
-    return { alreadyVoided: false, totalCents: order.totalCents };
-  });
+  return (await tx(async (t) => {
+      const order = (await t.select().from(orders).where(eq(orders.id, orderId)).limit(1))[0];
+      if (!order) throw new DomainError("ORDER_NOT_FOUND", "Sale not found.", 404);
+      if (order.channel !== "DOOR") throw new DomainError("NOT_DOOR_SALE", "Only walk-in sales can be voided.", 409);
+      if (order.status === "VOIDED") return { alreadyVoided: true, totalCents: order.totalCents };
+      assertOrderTransition(order.status, "VOIDED");
+      const res = (await t
+            .update(orders)
+            .set({ status: "VOIDED" })
+            .where(and(eq(orders.id, orderId), eq(orders.status, "APPROVED"))).returning());
+      if (res.length !== 1) return { alreadyVoided: true, totalCents: order.totalCents };
+      (await t.update(tickets)
+              .set({ status: "REVOKED", revokedAt: at, revokeReason: `Walk-in sale voided: ${reason.trim()}` })
+              .where(eq(tickets.orderId, orderId)).returning());
+      (await record(t, {
+              actor,
+              entityType: "order",
+              entityId: orderId,
+              eventId: order.eventId,
+              action: "DOOR_SALE_VOIDED",
+              from: "APPROVED",
+              to: "VOIDED",
+              at,
+              data: { reference: order.reference, reason: reason.trim(), quantity: order.quantity, totalCents: order.totalCents, soldBy: order.decidedBy },
+            }));
+      return { alreadyVoided: false, totalCents: order.totalCents };
+    }));
 }
 
 /** Everything the walk-in screen shows: price, what's left, cash per staff member, recent sales. */
-export function summary(eventId: string) {
-  const event = db().select().from(events).where(eq(events.id, eventId)).get();
+export async function summary(eventId: string) {
+  const event = (await db().select().from(events).where(eq(events.id, eventId)).limit(1))[0];
   if (!event) return null;
-  const sold = soldAtDoor(db(), eventId);
-  const byStaff = db()
-    .select({
-      staffId: orders.decidedBy,
-      name: users.name,
-      sales: sql<number>`count(*)`,
-      tickets: sql<number>`sum(${orders.quantity})`,
-      cents: sql<number>`sum(${orders.totalCents})`,
-    })
-    .from(orders)
-    .leftJoin(users, eq(users.id, orders.decidedBy))
-    .where(and(isDoor(eventId), eq(orders.status, "APPROVED")))
-    .groupBy(orders.decidedBy)
-    .orderBy(desc(sql`sum(${orders.totalCents})`))
-    .all()
+  const sold = (await soldAtDoor(db(), eventId));
+  const byStaff = (await db()
+      .select({
+        staffId: orders.decidedBy,
+        name: users.name,
+        sales: sql<number>`count(*)`,
+        tickets: sql<number>`sum(${orders.quantity})`,
+        cents: sql<number>`sum(${orders.totalCents})`,
+      })
+      .from(orders)
+      .leftJoin(users, eq(users.id, orders.decidedBy))
+      .where(and(isDoor(eventId), eq(orders.status, "APPROVED")))
+      .groupBy(orders.decidedBy, users.name)
+      .orderBy(desc(sql`sum(${orders.totalCents})`)))
     .map((r) => ({ ...r, sales: Number(r.sales), tickets: Number(r.tickets), cents: Number(r.cents) }));
-  const voided = db()
-    .select({ n: sql<number>`count(*)`, cents: sql<number>`coalesce(sum(${orders.totalCents}), 0)` })
-    .from(orders)
-    .where(and(isDoor(eventId), eq(orders.status, "VOIDED")))
-    .get()!;
-  const recent = db()
-    .select({ order: orders, staff: users.name })
-    .from(orders)
-    .leftJoin(users, eq(users.id, orders.decidedBy))
-    .where(isDoor(eventId))
-    .orderBy(desc(orders.createdAt))
-    .limit(25)
-    .all();
+  const voided = (await db()
+      .select({ n: sql<number>`count(*)`, cents: sql<number>`coalesce(sum(${orders.totalCents}), 0)` })
+      .from(orders)
+      .where(and(isDoor(eventId), eq(orders.status, "VOIDED"))).limit(1))[0]!;
+  const recent = (await db()
+      .select({ order: orders, staff: users.name })
+      .from(orders)
+      .leftJoin(users, eq(users.id, orders.decidedBy))
+      .where(isDoor(eventId))
+      .orderBy(desc(orders.createdAt))
+      .limit(25));
   return {
     event,
     priceCents: event.doorPriceCents,
