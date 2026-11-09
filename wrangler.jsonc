@@ -14,6 +14,7 @@
     "DEV_TOOLS": "0",
     "APP_URL": "https://night-shift.elieboutros.dev",
     "SUPABASE_URL": "https://jfmfmwslkkxfcbwijnxa.supabase.co",
-    "EMAIL_PROVIDER": "resend"
+    "EMAIL_PROVIDER": "resend",
+    "EMAIL_FROM": "Night Shift <tickets@elieboutros.dev>"
   }
 }
