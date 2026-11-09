@@ -1,49 +1,37 @@
-// Staff sessions: a signed cookie "<userId>.<expiresAt>". The user row is re-read on every
-// request, so deleting a user or changing their role takes effect immediately.
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { config } from "../config.ts";
 import type { User } from "../db/schema.ts";
 import type { Role } from "../domain/status.ts";
-import { getUser } from "../services/users.ts";
+import { revokeSession, SESSION_TTL, sessionUser } from "../services/login.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 
+// Test harness only. Production identities come from database-backed session tokens.
 const accessUsers = new AsyncLocalStorage<User>();
 export const withAccessUser = <T>(user: User, fn: () => T): T => accessUsers.run(user, fn);
-
 const COOKIE = "ns_session";
-const TTL_MS = 12 * 3600_000;
-
 export type Env = { Variables: { user: User } };
 
-export async function startSession(c: Context, user: User) {
-  await setSignedCookie(c, COOKIE, `${user.id}.${Date.now() + TTL_MS}`, config.sessionSecret, {
-    httpOnly: true,
-    sameSite: "Lax",
-    secure: config.isProd,
-    path: "/",
-    maxAge: TTL_MS / 1000,
+export async function startSession(c: Context, token: string) {
+  await setSignedCookie(c, COOKIE, token, config.sessionSecret, {
+    httpOnly: true, sameSite: "Lax", secure: config.isProd, path: "/", maxAge: SESSION_TTL / 1000,
   });
 }
-
-export const endSession = (c: Context) => deleteCookie(c, COOKIE, { path: "/" });
-
+export async function endSession(c: Context) {
+  const token = await getSignedCookie(c, config.sessionSecret, COOKIE);
+  if (typeof token === "string") await revokeSession(token);
+  deleteCookie(c, COOKIE, { path: "/" });
+}
 export async function currentUser(c: Context): Promise<User | null> {
   const verified = accessUsers.getStore();
-  if (verified) return verified;
-  const v = await getSignedCookie(c, config.sessionSecret, COOKIE);
-  if (!v) return null;
-  const [id, exp] = v.split(".");
-  // Real time, not the dev clock: time-travelling must not log you out.
-  if (!id || !exp || Number(exp) < Date.now()) return null;
-  return (await getUser(id));
+  if (verified) return verified.active ? verified : null;
+  const token = await getSignedCookie(c, config.sessionSecret, COOKIE);
+  return typeof token === "string" ? sessionUser(token) : null;
 }
-
-/** Gate a route group. Scanners only reach the door; admins reach everything. */
 export function requireRole(...roles: Role[]): MiddlewareHandler<Env> {
   return async (c, next) => {
     const user = await currentUser(c);
-    if (!user) return c.redirect(`/admin/login?next=${encodeURIComponent(c.req.path)}`);
+    if (!user) return c.redirect("/admin/login", 303);
     if (!roles.includes(user.role as Role)) return c.text("Forbidden", 403);
     c.set("user", user);
     await next();

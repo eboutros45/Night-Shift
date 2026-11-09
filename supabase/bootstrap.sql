@@ -8,4 +8,4 @@ on conflict (id) do update set public = false, file_size_limit = excluded.file_s
 
 -- No browser client accesses application tables. The Worker uses server credentials.
 revoke all on public.events, public.waves, public.orders, public.tickets, public.users,
- public.journal, public.page_views, public.rate_limits from anon, authenticated;
+ public.journal, public.page_views, public.rate_limits, public.login_challenges, public.staff_sessions from anon, authenticated;

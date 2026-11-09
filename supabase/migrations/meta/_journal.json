@@ -22,6 +22,13 @@
       "when": 1794240233764,
       "tag": "0002_pretty_iron_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794261020904,
+      "tag": "0003_burly_leech",
+      "breakpoints": true
     }
   ]
 }

@@ -32,17 +32,21 @@ Tests use an isolated PGlite PostgreSQL engine and tracked SQL migrations. They 
 
 ## Private web preview
 
-The deployment target is Cloudflare Workers with PostgreSQL (direct connection or a Hyperdrive binding) and private Supabase storage. `wrangler.jsonc` disables workers.dev and preview URLs. All Worker requests require a verified Cloudflare Access JWT for the owner account in `src/cloud/access.ts`, including assets and health checks. This preview is not yet a public ticket-sales deployment.
+Cloudflare Workers serves the app; PostgreSQL stores accounts, expiring login challenges, and revocable sessions. Supabase stores private uploads. Cloudflare Access is no longer required: the app gates the preview using its own staff email allowlist.
 
-Before deploying:
+Sign in at `/admin/login`. Enabled staff receive a six-digit code through Resend. Codes expire after ten minutes, allow five verification attempts, and work once. Requesting a new code invalidates the old one. Codes are never logged or stored in plaintext. Sessions expire after twelve hours and are revoked on logout, account disabling, or role changes.
 
-1. Set `DATABASE_URL` for the intended database and run `npm run db:migrate`. Run `supabase/bootstrap.sql` in the Supabase SQL editor to create private buckets and revoke browser-role access to application tables.
-2. Configure Cloudflare Access for the intended hostname with an owner-only allow policy. Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` on the Worker.
-3. Configure the hostname/route and check `APP_URL` and `SUPABASE_URL` in `wrangler.jsonc`. The URL variable alone does not configure DNS or a Worker route.
-4. Set Worker secrets `DATABASE_URL` (or configure `HYPERDRIVE`), `SUPABASE_SECRET_KEY`, `SESSION_SECRET`, and `RESEND_API_KEY`. Use a strong random session secret. Configure verified `EMAIL_FROM`, `SUPPORT_EMAIL`, and the real Whish details. Keep production mode enabled and development tools disabled.
-5. Run the checks above, then `npm run deploy` when ready to publish. Verify owner login, rejection of anonymous/other accounts, reservation, proof upload, approval/email, ticket scan, and duplicate scan against the hosted preview.
+Admins manage accounts at `/admin/staff`. Door scanners cannot manage staff or access admin operations. Unknown and disabled emails cannot sign in. There is no public registration. The initial production admin is provisioned separately; Worker requests never create or promote accounts automatically.
 
-Store credentials only in ignored environment files or provider secret stores. The Worker creates the owner admin account after successful Access verification; do not seed demo accounts into production.
+Deploy in this order:
+
+1. Run `npm run db:migrate` against the intended database, then run `supabase/bootstrap.sql` to initialize private storage and permissions.
+2. Configure Worker secrets `DATABASE_URL`, `SUPABASE_SECRET_KEY`, `SESSION_SECRET`, and `RESEND_API_KEY`. Set `EMAIL_FROM` to a sender on a verified Resend domain. Keep production mode enabled and development tools disabled.
+3. Run `npm run typecheck`, `npm test`, and `npm run build`, then deploy with `npm run deploy`. Configure the custom domain; `APP_URL` alone does not create a route.
+4. After the replacement login is deployed, remove the old Cloudflare Access protection so visitors reach the app's login page. `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are not used.
+5. Test email delivery, sign-in, logout, staff permissions, and account disabling. The entire preview remains restricted to enabled staff, including customer-facing pages. Opening public ticket sales is a separate change.
+
+Local interactive sign-in also requires Resend configuration and a staff account with an email you can receive. Demo passwords no longer authenticate. Do not seed demo accounts in production.
 
 ## Existing local data
 

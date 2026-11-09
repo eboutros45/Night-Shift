@@ -9,6 +9,8 @@ import { record } from "../services/journal.ts";
 const MIN = 60_000;
 
 export const LIMITS = {
+  loginCodePerIp: { limit: 10, windowMs: 15 * MIN, what: "code requests from this network" },
+  loginCodePerEmail: { limit: 3, windowMs: 15 * MIN, what: "code requests for this email" },
   checkoutPerIp: { limit: 10, windowMs: 10 * MIN, what: "checkout attempts from this network" },
   checkoutPerEmail: { limit: 5, windowMs: 10 * MIN, what: "orders for this email" },
   proofPerOrder: { limit: 6, windowMs: 10 * MIN, what: "proof uploads for this order" },

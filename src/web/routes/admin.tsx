@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../../db/client.ts";
 import { events as eventsT, orders as ordersT, tickets as ticketsT, waves as wavesT, type Event } from "../../db/schema.ts";
-import { compInput, eventInput, fieldErrors, lineupToText, loginInput, waveInput } from "../../domain/inputs.ts";
+import { compInput, eventInput, fieldErrors, lineupToText, waveInput } from "../../domain/inputs.ts";
 import { DomainError, ORDER_STATUSES, orderTier } from "../../domain/status.ts";
 import { readStored, saveUpload } from "../../lib/storage.ts";
 import { epochToLocalInput, fmtDate, fmtDayShort, fmtDuration, fmtHourMin, fmtStamp, money } from "../../lib/time.ts";
@@ -13,67 +13,13 @@ import * as events from "../../services/events.ts";
 import * as attendees from "../../services/attendees.ts";
 import * as orders from "../../services/orders.ts";
 import * as ticketsSvc from "../../services/tickets.ts";
-import { authenticate } from "../../services/users.ts";
 import * as limits from "../../lib/limits.ts";
-import { act, back, clientIp, flash, form, retryAfter } from "../http.ts";
+import { act, back, flash, form } from "../http.ts";
 import type { WaveView } from "../../domain/waves.ts";
 import { Empty, FieldErr, Flash, Flyer, Page, Status, Timeline } from "../layout.tsx";
-import { currentUser, endSession, startSession, type Env } from "../session.ts";
+import { type Env } from "../session.ts";
 
 export const admin = new Hono<Env>();
-
-// ---------- auth ----------
-
-admin.get("/login", async (c) => {
-  const user = await currentUser(c);
-  if (user) return c.redirect(user.role === "ADMIN" ? "/admin" : "/admin/door");
-  return c.html(
-    <Page title="Staff login">
-      <div style="max-width:380px;margin:40px auto">
-        <h1>Staff login</h1>
-        <p class="sub">Admins manage events and payments. Door staff scan tickets.</p>
-        <Flash err={c.req.query("err")} />
-        <form method="post" class="card fields">
-          <input type="hidden" name="next" value={c.req.query("next") ?? ""} />
-          <label>
-            Email <input name="email" type="email" required autocomplete="username" autofocus />
-          </label>
-          <label>
-            Password <input name="password" type="password" required autocomplete="current-password" />
-          </label>
-          <button class="primary block">Log in</button>
-        </form>
-      </div>
-    </Page>,
-  );
-});
-
-admin.post("/login", async (c) => {
-  const f = await form(c);
-  const parsed = loginInput.safeParse(f);
-  const email = parsed.success ? parsed.data.email : "";
-  try {
-    // Per network, and per account: failures on one email are capped even if spread over many IPs.
-    (await limits.take("loginPerIp", clientIp(c)));
-    if (email) (await limits.check("loginFailuresPerEmail", email));
-  } catch (e) {
-    retryAfter(c, e);
-    return back(c, "/admin/login", { err: (e as Error).message });
-  }
-  const user = parsed.success ? (await authenticate(email, parsed.data.password)) : null;
-  if (!user) {
-    if (email) (await limits.hit("loginFailuresPerEmail", email));
-    return back(c, "/admin/login", { err: "Wrong email or password." });
-  }
-  await startSession(c, user);
-  const next = f.next?.startsWith("/admin") && !f.next.startsWith("//") ? f.next : null;
-  return c.redirect(next ?? (user.role === "ADMIN" ? "/admin" : "/admin/door"), 303);
-});
-
-admin.post("/logout", (c) => {
-  endSession(c);
-  return c.redirect("/admin/login", 303);
-});
 
 // ---------- dashboard ----------
 

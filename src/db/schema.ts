@@ -14,6 +14,7 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   passwordHash: text("password_hash").notNull(),
   role: text("role").notNull(), // ADMIN | SCANNER
+  active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
 }).enableRLS();
 
@@ -175,3 +176,18 @@ export const rateLimits = pgTable("rate_limits", {
   resetAt: bigint("reset_at", { mode: "number" }).notNull(),
   reported: boolean("reported").notNull().default(false),
 }).enableRLS();
+
+// Login codes are HMAC hashes; session tokens are SHA-256 hashes, never raw values.
+export const loginChallenges = pgTable("login_challenges", {
+  id: id(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  codeHash: text("code_hash").notNull(),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  attempts: integer("attempts").notNull().default(0),
+}, (t) => [uniqueIndex("login_challenges_user").on(t.userId), index("login_challenges_expiry").on(t.expiresAt)]).enableRLS();
+
+export const staffSessions = pgTable("staff_sessions", {
+  id: id(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+}, (t) => [index("staff_sessions_user").on(t.userId), index("staff_sessions_expiry").on(t.expiresAt)]).enableRLS();

@@ -44,8 +44,6 @@ export const config = {
   },
 } as const;
 
-if (config.isProd && config.sessionSecret.startsWith("dev-only")) {
-  throw new Error("SESSION_SECRET must be set in production");
-}
+// Production requirements are checked inside the Worker request handler, not at upload time.
 
 export const appUrl = (path = "") => `${config.appUrl}${path}`;

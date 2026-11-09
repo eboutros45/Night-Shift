@@ -656,6 +656,7 @@ const AdminShell: FC<PropsWithChildren<{ title: string; user: User; path: string
                     <span class="sep" aria-hidden="true"></span>
                     {link("/admin/analytics", "Analytics")}
                     {link("/admin/email", "Email")}
+                    {link("/admin/staff", "Staff access")}
                     {link("/admin/trace", "Trace")}
                   </>
                 )}
