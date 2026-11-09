@@ -1,0 +1,1 @@
+ALTER TABLE `events` ADD `max_per_buyer` integer DEFAULT 6 NOT NULL;

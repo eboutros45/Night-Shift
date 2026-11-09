@@ -1,0 +1,11 @@
+node_modules/
+data/
+.env
+.env.*
+!.env.example
+Backup - Old Modern UI/
+storage/proofs/*
+storage/media/*
+!storage/**/.gitkeep
+*.log
+data-backup/
