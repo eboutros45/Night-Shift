@@ -3,6 +3,23 @@
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const money = (c) => `$${(c / 100).toFixed(c % 100 ? 2 : 0)}`;
 
+  for (const box of document.querySelectorAll('[data-otp]')) {
+    const input = box.querySelector('input');
+    const slots = [...box.querySelectorAll('[data-digit]')];
+    box.classList.add('otp-enhanced');
+    const sync = () => {
+      const clean = input.value.replace(/[^0-9]/g, '').slice(0, 6);
+      if (input.value !== clean) input.value = clean;
+      slots.forEach((slot, index) => {
+        slot.textContent = clean[index] || '0';
+        slot.classList.toggle('empty', !clean[index]);
+        slot.classList.toggle('active', document.activeElement === input && index === Math.min(input.selectionStart ?? clean.length, 5));
+      });
+    };
+    for (const event of ['input', 'focus', 'blur', 'keyup', 'click']) input.addEventListener(event, sync);
+    sync();
+  }
+
   // Live countdowns: <span data-countdown="msLeft">. Reloads at zero so the page shows the new state.
   const fmt = (ms) => {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -89,6 +106,10 @@
 
   // Back/forward cache restores pages with buttons still disabled from an earlier submit.
   window.addEventListener("pageshow", (e) => {
+    for (const button of document.querySelectorAll('[data-original-label]')) {
+      button.innerHTML = button.dataset.originalLabel;
+      delete button.dataset.originalLabel;
+    }
     if (e.persisted) for (const b of $$("form button:disabled")) (b.disabled = false), b.classList.remove("busy");
   });
 
@@ -109,7 +130,13 @@
   document.addEventListener("submit", (e) => {
     if (e.defaultPrevented || (e.target.method || "").toLowerCase() === "get") return;
     const pressed = e.submitter;
-    if (pressed) pressed.classList.add("busy");
+    if (pressed) {
+      pressed.classList.add("busy");
+      if (pressed.dataset.busyLabel) {
+        pressed.dataset.originalLabel = pressed.innerHTML;
+        pressed.textContent = pressed.dataset.busyLabel;
+      }
+    }
     for (const b of e.target.querySelectorAll("button")) setTimeout(() => (b.disabled = true));
   });
 })();

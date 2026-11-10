@@ -5,6 +5,7 @@ import { Hono, type Context } from "hono";
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { now } from "../../clock.ts";
+import { currentUser } from "../session.ts";
 import { config } from "../../config.ts";
 import type { Event } from "../../db/schema.ts";
 import { checkoutInput, fieldErrors, proofInput } from "../../domain/inputs.ts";
@@ -377,7 +378,7 @@ function CheckoutPage(props: {
             </label>
             <label>
               Email
-              <input name="customerEmail" type="email" value={v.customerEmail ?? ""} required autocomplete="email" inputmode="email" />
+              <input name="customerEmail" readonly type="email" value={v.customerEmail ?? ""} required autocomplete="email" inputmode="email" />
               <FieldErr e={props.errors} k="customerEmail" />
             </label>
             <label>
@@ -401,6 +402,23 @@ function CheckoutPage(props: {
   );
 }
 
+pub.use("/e/:slug/checkout", async (c, next) => {
+  if (!await currentUser(c)) {
+    const destination = c.req.method === "GET" ? c.req.path + new URL(c.req.url).search : `/e/${c.req.param("slug")}`;
+    return c.redirect(`/login?next=${encodeURIComponent(destination)}`, 303);
+  }
+  await next();
+});
+pub.use("/o/:token/*", async (c, next) => {
+  const data = await orders.getByToken(c.req.param("token"));
+  if (data?.order.userId) {
+    const user = await currentUser(c);
+    if (!user) return c.redirect(`/login?next=${encodeURIComponent(c.req.path)}`, 303);
+    if (user.id !== data.order.userId && user.role !== "ADMIN") return c.notFound();
+  }
+  await next();
+});
+
 pub.get("/e/:slug/checkout", async (c) => {
   const slug = c.req.param("slug");
   const data = (await events.getPublic(slug));
@@ -408,7 +426,7 @@ pub.get("/e/:slug/checkout", async (c) => {
   const wave = data.waves.find((w) => w.id === (c.req.query("wave") ?? "") && w.state === "ON_SALE");
   if (!wave || !data.salesOpen) return c.redirect(`/e/${slug}#tickets`, 303);
   (await view(c, "CHECKOUT_START", data.event.id));
-  return c.html(<CheckoutPage data={data} wave={wave} values={{ quantity: c.req.query("quantity") ?? "1" }} />);
+  return c.html(<CheckoutPage data={data} wave={wave} values={{ quantity: c.req.query("quantity") ?? "1", customerEmail: (await currentUser(c))!.email, customerName: (await currentUser(c))!.name }} />);
 });
 
 pub.post("/e/:slug/checkout", async (c) => {
@@ -417,6 +435,8 @@ pub.post("/e/:slug/checkout", async (c) => {
   if (!data) return c.notFound();
   const body = await c.req.parseBody();
   const values = Object.fromEntries(Object.entries(body).filter(([, v]) => typeof v === "string")) as Record<string, string>;
+  const user = (await currentUser(c))!;
+  values.customerEmail = user.email;
   const wave = data.waves.find((w) => w.id === values.waveId);
   if (!wave) return c.redirect(`/e/${slug}#tickets`, 303);
   const parsed = checkoutInput.safeParse(values);
@@ -424,7 +444,7 @@ pub.post("/e/:slug/checkout", async (c) => {
   try {
     (await limits.take("checkoutPerIp", clientIp(c)));
     (await limits.take("checkoutPerEmail", parsed.data.customerEmail));
-    const order = (await orders.reserve(slug, parsed.data));
+    const order = (await orders.reserve(slug, parsed.data, now(), user.id));
     return c.redirect(`/o/${order.accessToken}`, 303);
   } catch (e) {
     if (!(e instanceof DomainError)) throw e;

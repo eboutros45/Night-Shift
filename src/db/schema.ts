@@ -13,7 +13,7 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   passwordHash: text("password_hash").notNull(),
-  role: text("role").notNull(), // ADMIN | SCANNER
+  role: text("role").notNull(), // ADMIN | SCANNER | CUSTOMER
   active: boolean("active").notNull().default(true),
   createdAt: createdAt(),
 }).enableRLS();
@@ -81,6 +81,7 @@ export const orders = pgTable(
     totalCents: integer("total_cents").notNull(),
     isComp: boolean("is_comp").notNull().default(false),
     channel: text("channel").notNull().default("ONLINE"), // ONLINE (Whish, verified) | DOOR (cash, logged by staff)
+    userId: text("user_id").references(() => users.id),
     customerName: text("customer_name").notNull(),
     customerEmail: text("customer_email").notNull(),
     customerPhone: text("customer_phone").notNull(),
@@ -95,6 +96,7 @@ export const orders = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
+    index("orders_user").on(t.userId),
     index("orders_wave_status").on(t.waveId, t.status),
     index("orders_status_expires").on(t.status, t.expiresAt),
     index("orders_event_status").on(t.eventId, t.status),
@@ -180,11 +182,13 @@ export const rateLimits = pgTable("rate_limits", {
 // Login codes are HMAC hashes; session tokens are SHA-256 hashes, never raw values.
 export const loginChallenges = pgTable("login_challenges", {
   id: id(),
-  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  audience: text("audience").notNull().default("staff"),
   codeHash: text("code_hash").notNull(),
   expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
   attempts: integer("attempts").notNull().default(0),
-}, (t) => [uniqueIndex("login_challenges_user").on(t.userId), index("login_challenges_expiry").on(t.expiresAt)]).enableRLS();
+}, (t) => [uniqueIndex("login_challenges_user").on(t.userId), uniqueIndex("login_challenges_email").on(t.email), index("login_challenges_expiry").on(t.expiresAt)]).enableRLS();
 
 export const staffSessions = pgTable("staff_sessions", {
   id: id(),

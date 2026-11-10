@@ -7,11 +7,11 @@ import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { config } from "./config.ts";
 import { DomainError, type Role } from "./domain/status.ts";
-import { sweepExpiredThrottled } from "./services/inventory.ts";
 import { admin } from "./web/routes/admin.tsx";
 import { door } from "./web/routes/door.tsx";
 import { insights } from "./web/routes/insights.tsx";
 import { pub } from "./web/routes/public.tsx";
+import { customerAuth } from "./web/routes/customer-auth.tsx";
 import { auth } from "./web/routes/auth.tsx";
 import { staff } from "./web/routes/staff.tsx";
 import { currentUser, requireRole, type Env } from "./web/session.ts";
@@ -61,20 +61,8 @@ export function createApp(assets?: (request: Request) => Promise<Response>) {
   const upload = bodyLimit({ maxSize: config.uploadLimitBytes + 512 * 1024, onError: (c) => c.text("File too large (max 5 MB).", 413) });
   app.use("*", (c, next) => (UPLOAD_PATH.test(c.req.path) ? upload : small)(c, next));
 
-  // Private preview: the database staff list replaces the Cloudflare Access guestlist.
-  // Only login pages and static assets are anonymous; all application data needs a session.
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
-    const path = c.req.path;
-    const loginPath = /^\/admin\/(login|verify|logout)$/.test(path);
-    const assetPath = /^\/(static\/|fonts\/|app\.js$|door\.js$)/.test(path);
-    if (!loginPath && !assetPath && !await currentUser(c)) return c.redirect("/admin/login", 303);
-    await next();
-  });
-
-  // Expiry is computed on read; this only *records* lapsed holds in the journal, at most once a minute.
-  app.use("*", async (_c, next) => {
-    (await sweepExpiredThrottled());
     await next();
   });
 
@@ -94,6 +82,7 @@ export function createApp(assets?: (request: Request) => Promise<Response>) {
     }
   }
 
+  app.route("/", customerAuth);
   app.route("/admin", auth);
   app.route("/admin", staff);
   app.route("/", pub);

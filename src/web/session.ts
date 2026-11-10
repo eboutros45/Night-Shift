@@ -13,16 +13,24 @@ const COOKIE = "ns_session";
 export type Env = { Variables: { user: User } };
 
 export async function startSession(c: Context, token: string) {
+  identities.delete(c);
   await setSignedCookie(c, COOKIE, token, config.sessionSecret, {
     httpOnly: true, sameSite: "Lax", secure: config.isProd, path: "/", maxAge: SESSION_TTL / 1000,
   });
 }
 export async function endSession(c: Context) {
+  identities.delete(c);
   const token = await getSignedCookie(c, config.sessionSecret, COOKIE);
   if (typeof token === "string") await revokeSession(token);
   deleteCookie(c, COOKIE, { path: "/" });
 }
-export async function currentUser(c: Context): Promise<User | null> {
+const identities = new WeakMap<Context, Promise<User | null>>();
+export function currentUser(c: Context): Promise<User | null> {
+  let identity = identities.get(c);
+  if (!identity) { identity = readUser(c); identities.set(c, identity); }
+  return identity;
+}
+async function readUser(c: Context): Promise<User | null> {
   const verified = accessUsers.getStore();
   if (verified) return verified.active ? verified : null;
   const token = await getSignedCookie(c, config.sessionSecret, COOKIE);

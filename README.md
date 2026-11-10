@@ -30,23 +30,19 @@ npm run build
 
 Tests use an isolated PGlite PostgreSQL engine and tracked SQL migrations. They do not verify live Supabase connectivity or cross-instance PostgreSQL locking. The build bundles assets and performs a Worker deployment dry run; it does not publish.
 
-## Private web preview
+## Public browsing, customer accounts, and management
 
-Cloudflare Workers serves the app; PostgreSQL stores accounts, expiring login challenges, and revocable sessions. Supabase stores private uploads. Cloudflare Access is no longer required: the app gates the preview using its own staff email allowlist.
+Visitors can browse events without signing in. Checkout requires email-code sign-in at `/login`; the first successful verification creates a CUSTOMER account. The selected checkout URL is retained through verification. New orders belong to that account, use its verified email, and appear at `/account`. Existing legacy and complimentary order links retain their bearer-link behavior.
 
-Sign in at `/admin/login`. Enabled staff receive a six-digit code through Resend. Codes expire after ten minutes, allow five verification attempts, and work once. Requesting a new code invalidates the old one. Codes are never logged or stored in plaintext. Sessions expire after twelve hours and are revoked on logout, account disabling, or role changes.
+The MGMT link opens `/admin/login`. Only enabled ADMIN and SCANNER accounts can use management sign-in. Customer registration cannot grant staff access. Administrators manage staff at `/admin/staff`.
 
-Admins manage accounts at `/admin/staff`. Door scanners cannot manage staff or access admin operations. Unknown and disabled emails cannot sign in. There is no public registration. The initial production admin is provisioned separately; Worker requests never create or promote accounts automatically.
+Codes are HMAC hashes, expire after ten minutes, allow five attempts, and work once. Resend sends them; sessions expire after twelve hours and are revoked on logout or staff access changes. Staff and customer challenges have separate audiences. A new code replaces the previous one for that email.
 
-Deploy in this order:
+Cloudflare Hyperdrive pools database connections with query caching disabled to keep session revocation and ticket inventory current. Event inventory is fetched in batches, identities are reused only within a single request, and reservation cleanup runs from a one-minute Cron Trigger instead of blocking page requests. Expiry is still computed when reading or reserving tickets.
 
-1. Run `npm run db:migrate` against the intended database, then run `supabase/bootstrap.sql` to initialize private storage and permissions.
-2. Configure Worker secrets `DATABASE_URL`, `SUPABASE_SECRET_KEY`, `SESSION_SECRET`, and `RESEND_API_KEY`. Set `EMAIL_FROM` to a sender on a verified Resend domain. Keep production mode enabled and development tools disabled.
-3. Run `npm run typecheck`, `npm test`, and `npm run build`, then deploy with `npm run deploy`. Configure the custom domain; `APP_URL` alone does not create a route.
-4. After the replacement login is deployed, remove the old Cloudflare Access protection so visitors reach the app's login page. `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are not used.
-5. Test email delivery, sign-in, logout, staff permissions, and account disabling. The entire preview remains restricted to enabled staff, including customer-facing pages. Opening public ticket sales is a separate change.
+Deploy schema changes with `npm run db:migrate` before deploying the Worker. Required secrets remain DATABASE_URL, SUPABASE_SECRET_KEY, SESSION_SECRET, and RESEND_API_KEY. Configure EMAIL_FROM with a verified sender. Do not seed demo accounts in production. Local sign-in also requires working Resend settings.
 
-Local interactive sign-in also requires Resend configuration and a staff account with an email you can receive. Demo passwords no longer authenticate. Do not seed demo accounts in production.
+Verification: run `npm run typecheck`, `npm test`, and `npm run build`. Tests cover public browsing, checkout ownership, customer/staff separation, code replay and expiry, navigation, and constant event-list query count. They do not replace a real inbox-delivery check.
 
 ## Existing local data
 

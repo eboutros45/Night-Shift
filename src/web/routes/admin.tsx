@@ -24,9 +24,8 @@ export const admin = new Hono<Env>();
 // ---------- dashboard ----------
 
 admin.get("/", async (c) => {
-  const list = (await events.listAdmin());
-  const pending = (await orders.countByStatus(["PENDING_VERIFICATION"]));
-  const awaiting = (await orders.countByStatus(["AWAITING_PAYMENT"]));
+  const [list, awaiting] = await Promise.all([events.listAdmin(), orders.countByStatus(["AWAITING_PAYMENT"])]);
+  const pending = list.reduce((n, entry) => n + entry.pendingOrders, 0);
   const issued = list.reduce((n, e) => n + e.ticketsIssued, 0);
   return c.html(
     <Page title="Events" user={c.get("user")} path="/admin">
@@ -311,8 +310,9 @@ async function EventPage(props: {
   v?: Record<string, string>;
   e?: Record<string, string>;
   msg: { ok?: string; err?: string };
+  data?: NonNullable<Awaited<ReturnType<typeof events.getAdmin>>>;
 }) {
-  const { event: ev, waves } = (await events.getAdmin(props.id))!;
+  const { event: ev, waves } = (props.data ?? await events.getAdmin(props.id))!;
   const base = `/admin/events/${ev.id}`;
   const held = waves.reduce((n, w) => n + w.held, 0);
   const cap = waves.reduce((n, w) => n + w.capacity, 0);
@@ -486,8 +486,9 @@ async function EventPage(props: {
 }
 
 admin.get("/events/:id", async (c) => {
-  if (!(await events.getAdmin(c.req.param("id")))) return c.notFound();
-  return c.html(<EventPage c={c} id={c.req.param("id")} msg={flash(c)} />);
+  const data = await events.getAdmin(c.req.param("id"));
+  if (!data) return c.notFound();
+  return c.html(<EventPage c={c} id={c.req.param("id")} data={data} msg={flash(c)} />);
 });
 
 admin.post("/events/:id", async (c) => {

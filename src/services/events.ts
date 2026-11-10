@@ -7,7 +7,7 @@ import type { EventInput, LineupItem, WaveInput } from "../domain/inputs.ts";
 import { DomainError } from "../domain/status.ts";
 import { eventSaleState, fromPrice } from "../domain/waves.ts";
 import { newId } from "../lib/ids.ts";
-import { waveViews } from "./inventory.ts";
+import { waveViews, waveViewsForEvents } from "./inventory.ts";
 import { record } from "./journal.ts";
 
 const SHOW_AFTER_START_MS = 6 * 3600_000;
@@ -24,14 +24,12 @@ const toRow = (i: EventInput) => ({ ...i, lineup: JSON.stringify(i.lineup) });
 // ---------- public ----------
 
 export async function listPublic(at = now()) {
-  return (await Promise.all((await db()
-        .select()
-        .from(events)
-        .where(and(eq(events.published, true), gt(events.startsAt, at - SHOW_AFTER_START_MS)))
-        .orderBy(asc(events.startsAt))).map(async (e) => {
-        const waves = (await waveViews(db(), e.id, at));
-        return { event: e, waves, sale: eventSaleState(waves), from: fromPrice(waves), low: waves.some((w) => w.low) };
-      })));
+  const list = await db().select().from(events).where(and(eq(events.published, true), gt(events.startsAt, at - SHOW_AFTER_START_MS))).orderBy(asc(events.startsAt));
+  const grouped = await waveViewsForEvents(db(), list.map(event => event.id), at);
+  return list.map(event => {
+    const waves = grouped.get(event.id)!;
+    return { event, waves, sale: eventSaleState(waves), from: fromPrice(waves), low: waves.some(w => w.low) };
+  });
 }
 
 export async function getPublic(slug: string, at = now()) {
@@ -45,37 +43,18 @@ export async function getPublic(slug: string, at = now()) {
 
 export async function listAdmin() {
   const at = now();
-  const sold = new Map(
-    (await db()
-            .select({ eventId: tickets.eventId, n: count() })
-            .from(tickets)
-            .where(sql`${tickets.status} != 'REVOKED'`)
-            .groupBy(tickets.eventId))
-      .map((r) => [r.eventId, r.n]),
-  );
-  const pending = new Map(
-    (await db()
-            .select({ eventId: orders.eventId, n: count() })
-            .from(orders)
-            .where(eq(orders.status, "PENDING_VERIFICATION"))
-            .groupBy(orders.eventId))
-      .map((r) => [r.eventId, r.n]),
-  );
-  return (await Promise.all((await db()
-        .select()
-        .from(events)
-        .orderBy(desc(events.startsAt))).map(async (e) => {
-        const waves = (await waveViews(db(), e.id, at));
-        return {
-          event: e,
-          waves,
-          held: waves.reduce((n, w) => n + w.held, 0),
-          capacity: waves.reduce((n, w) => n + w.capacity, 0),
-          ticketsIssued: sold.get(e.id) ?? 0,
-          pendingOrders: pending.get(e.id) ?? 0,
-          sale: eventSaleState(waves),
-        };
-      })));
+  const [list, soldRows, pendingRows] = await Promise.all([
+    db().select().from(events).orderBy(desc(events.startsAt)),
+    db().select({ eventId: tickets.eventId, n: count() }).from(tickets).where(sql`${tickets.status} != 'REVOKED'`).groupBy(tickets.eventId),
+    db().select({ eventId: orders.eventId, n: count() }).from(orders).where(eq(orders.status, "PENDING_VERIFICATION")).groupBy(orders.eventId),
+  ]);
+  const sold = new Map(soldRows.map(r => [r.eventId, r.n]));
+  const pending = new Map(pendingRows.map(r => [r.eventId, r.n]));
+  const grouped = await waveViewsForEvents(db(), list.map(event => event.id), at);
+  return list.map(event => {
+    const waves = grouped.get(event.id)!;
+    return { event, waves, held: waves.reduce((n, w) => n + w.held, 0), capacity: waves.reduce((n, w) => n + w.capacity, 0), ticketsIssued: sold.get(event.id) ?? 0, pendingOrders: pending.get(event.id) ?? 0, sale: eventSaleState(waves) };
+  });
 }
 
 export async function getAdmin(id: string) {

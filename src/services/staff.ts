@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, tx } from "../db/client.ts";
 import { loginChallenges, staffSessions, users } from "../db/schema.ts";
@@ -8,7 +8,7 @@ import { emailInput } from "./login.ts";
 import { record } from "./journal.ts";
 
 const staffInput = z.object({ email: emailInput, name: z.string().trim().min(1).max(100), role: z.enum(["ADMIN", "SCANNER"]), active: z.boolean() }).strict();
-export const listStaff = () => db().select({ id: users.id, email: users.email, name: users.name, role: users.role, active: users.active }).from(users).orderBy(users.email);
+export const listStaff = () => db().select({ id: users.id, email: users.email, name: users.name, role: users.role, active: users.active }).from(users).where(inArray(users.role, ["ADMIN", "SCANNER"])).orderBy(users.email);
 
 export async function saveStaff(actorId: string, input: unknown) {
   const parsed = staffInput.safeParse(input);

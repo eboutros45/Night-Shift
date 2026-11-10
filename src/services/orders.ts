@@ -64,7 +64,7 @@ async function assertBuyerLimits(t: Tx, event: Event, input: CheckoutInput, at: 
     );
 }
 
-export async function reserve(slug: string, input: CheckoutInput, at = now()) {
+export async function reserve(slug: string, input: CheckoutInput, at = now(), userId: string | null = null) {
   return (await tx(async (t) => {
       const event = (await t.select().from(events).where(and(eq(events.slug, slug), eq(events.published, true))).limit(1))[0];
       if (!event) throw new DomainError("EVENT_NOT_FOUND", "This event is not available.", 404);
@@ -99,6 +99,7 @@ export async function reserve(slug: string, input: CheckoutInput, at = now()) {
         totalCents: wave.priceCents * input.quantity,
         isComp: false,
         channel: "ONLINE",
+        userId,
         customerName: input.customerName,
         customerEmail: input.customerEmail,
         customerPhone: input.customerPhone,
@@ -269,6 +270,7 @@ export async function createComp(input: CompInput, actor: string, at = now()) {
         totalCents: 0,
         isComp: true,
         channel: "ONLINE",
+        userId: null,
         customerName: input.attendeeName,
         customerEmail: input.email,
         customerPhone: input.phone,

@@ -1,6 +1,6 @@
 // Domain vocabulary and state machines. Pure: no database, no clock.
 
-export const ROLES = ["ADMIN", "SCANNER"] as const;
+export const ROLES = ["ADMIN", "SCANNER", "CUSTOMER"] as const;
 export type Role = (typeof ROLES)[number];
 
 export const ORDER_STATUSES = ["AWAITING_PAYMENT", "PENDING_VERIFICATION", "APPROVED", "REJECTED", "EXPIRED", "VOIDED"] as const;

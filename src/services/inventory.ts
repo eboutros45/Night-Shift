@@ -26,13 +26,27 @@ export async function heldByWave(x: Exec, eventId: string, at: number) {
   return new Map(rows.map((r) => [r.waveId!, Number(r.held)]));
 }
 
+/** Two queries for all requested events, instead of two per event. */
+export async function waveViewsForEvents(x: Exec, eventIds: string[], at = now()) {
+  if (!eventIds.length) return new Map<string, ReturnType<typeof computeWaveStates>>();
+  const [heldRows, allWaves] = await Promise.all([
+    x.select({ waveId: orders.waveId, held: sql<number>`sum(${orders.quantity})` }).from(orders)
+      .where(and(inArray(orders.eventId, eventIds), isNotNull(orders.waveId), or(
+        inArray(orders.status, ["PENDING_VERIFICATION", "APPROVED"]),
+        and(eq(orders.status, "AWAITING_PAYMENT"), gt(orders.expiresAt, at)))))
+      .groupBy(orders.waveId),
+    x.select().from(waves).where(inArray(waves.eventId, eventIds)).orderBy(asc(waves.position)),
+  ]);
+  const held = new Map(heldRows.map(row => [row.waveId, Number(row.held)]));
+  const grouped = new Map<string, typeof allWaves>();
+  for (const wave of allWaves) {
+    const group = grouped.get(wave.eventId) ?? [];
+    group.push(wave); grouped.set(wave.eventId, group);
+  }
+  return new Map(eventIds.map(id => [id, computeWaveStates((grouped.get(id) ?? []).map(wave => ({ ...wave, held: held.get(wave.id) ?? 0 })), at)]));
+}
 export async function waveViews(x: Exec, eventId: string, at = now()) {
-  const held = (await heldByWave(x, eventId, at));
-  const list = (await x.select().from(waves).where(eq(waves.eventId, eventId)).orderBy(asc(waves.position)));
-  return computeWaveStates(
-    list.map((w) => ({ ...w, held: held.get(w.id) ?? 0 })),
-    at,
-  );
+  return (await waveViewsForEvents(x, [eventId], at)).get(eventId)!;
 }
 
 /**

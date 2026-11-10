@@ -114,9 +114,9 @@ it("disabling or changing roles revokes sessions and pending codes permanently",
   await saveStaff("admin-1", { ...data, role: "ADMIN" });
   expect(await sessionUser(another.token)).toBeNull();
 });
-it("guards the entire preview and refuses forged Cloudflare identity headers", async () => {
+it("guards management and refuses forged Cloudflare identity headers", async () => {
   const app = createApp();
-  for (const path of ["/", "/admin", "/admin/staff", "/admin/door", "/e/anything", "/o/token", "/healthz"]) {
+  for (const path of ["/admin", "/admin/staff", "/admin/door"]) {
     const response = await app.request(`http://localhost:3000${path}`, { headers: { "Cf-Access-Jwt-Assertion": "forged" } });
     expect(response.status, path).toBe(303);
     expect(response.headers.get("location")).toBe("/admin/login");

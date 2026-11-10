@@ -369,6 +369,25 @@ details.void[open] summary{margin-bottom:8px}
 details.void form{display:grid;gap:8px;width:min(240px,52vw)}
 details.void input{min-width:0;width:100%}
 
+
+/* Email sign-in: one native input, six visual slots, no focus hopping. */
+.sign-in{width:100%;max-width:480px;margin:clamp(30px,7vh,80px) auto 60px}
+.sign-in-kicker{font:600 .75rem var(--mono);text-transform:uppercase;letter-spacing:.14em;color:var(--sodium);margin:0 0 26px}
+.sign-in h1{font-size:clamp(2.6rem,8vw,4.2rem);font-stretch:75%;line-height:1;letter-spacing:-.04em;margin:0 0 18px}
+.sign-in-intro{color:var(--fog);max-width:40ch;overflow-wrap:anywhere;margin:0 0 30px}
+.sign-in-form{gap:12px}.sign-in-form>input{margin:0;min-height:56px;font-size:1rem}
+.sign-in .sign-in-submit{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;margin-top:12px;padding:15px 20px;border-radius:6px;font:700 1rem var(--display);cursor:pointer}
+.sign-in-submit span{font-size:1.4rem;transition:transform .15s}.sign-in-submit:hover span{transform:translate(2px,-2px)}
+.sign-in-submit:disabled{cursor:wait;opacity:.75}.sign-in-secondary{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:22px;font-size:.875rem}
+.sign-in-secondary form{margin:0}.sign-in-secondary button{padding-left:0}.sign-in-back{display:inline-block;margin-top:38px;color:var(--fog);font-size:.875rem}
+.otp{position:relative;height:66px;isolation:isolate}.otp input{position:absolute;inset:0;width:100%;height:100%;margin:0;z-index:2;font:500 1.8rem var(--mono);letter-spacing:.45em}
+.otp-slots{display:none;height:100%;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;pointer-events:none}
+.otp-enhanced .otp-slots{display:grid}.otp-enhanced input{background:transparent;border:0;color:transparent;caret-color:transparent;box-shadow:none;padding:0;letter-spacing:normal}
+.otp-slots span{display:grid;place-items:center;border:1px solid var(--line-2);border-radius:6px;background:var(--char);color:var(--bone);font:500 1.8rem var(--mono);transition:border-color .15s,background .15s}
+.otp-slots span.empty{color:#555;text-shadow:0 1px 8px #000}.otp-slots span.active{border-color:var(--sodium);background:var(--char-2)}
+.otp-enhanced input::placeholder{color:transparent}.otp-enhanced:focus-within{outline:2px solid var(--sodium);outline-offset:5px;border-radius:6px}.otp-enhanced input:focus-visible{outline:none}
+@media(max-width:380px){.otp-slots{gap:5px}.sign-in-secondary{align-items:flex-start;flex-direction:column}.otp{height:58px}}
+
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 `;
 
@@ -576,7 +595,8 @@ export const Page: FC<PageProps> = ({ title, user, path = "", head, bodyClass, c
               <a href="/" class={path === "/" ? "on" : ""}>
                 Events
               </a>
-              <a href="/admin/login">Staff</a>
+              <a href="/account">My tickets</a>
+              <a href="/admin/login">MGMT</a>
             </nav>
           </div>
         </header>
