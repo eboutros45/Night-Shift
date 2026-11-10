@@ -238,6 +238,24 @@ const NewEventPage = ({ c, v, e, err }: { c: { get: (k: "user") => Env["Variable
   </Page>
 );
 
+// Register the literal /new route before /events/:id.
+admin.get("/events/new", (c) => c.html(<NewEventPage c={c} v={NEW_DEFAULTS} />));
+
+admin.post("/events/new", async (c) => {
+  const values = await form(c);
+  const parsed = eventInput.safeParse(values);
+  if (!parsed.success) {
+    return c.html(<NewEventPage c={c} v={values} e={fieldErrors(parsed.error)} err="Fix the highlighted fields." />, 400);
+  }
+  try {
+    const id = await events.create(parsed.data, c.get("user").id);
+    return back(c, `/admin/events/${id}`, { ok: "Draft created. Add ticket waves, then publish when ready." });
+  } catch (error) {
+    if (!(error instanceof DomainError)) throw error;
+    return c.html(<NewEventPage c={c} v={values} err={error.message} />, error.status);
+  }
+});
+
 const MODE_HELP = {
   MANUAL: "Manual: sells while you have it switched on",
   AUTO: "Auto: opens when the wave above sells out",
