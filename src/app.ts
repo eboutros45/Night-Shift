@@ -86,7 +86,11 @@ export function createApp(assets?: (request: Request) => Promise<Response>) {
 
   if (assets) {
     for (const path of ["/static/*", "/fonts/*", "/app.js", "/door.js"]) {
-      app.get(path, (c) => assets(c.req.raw));
+      app.get(path, async (c) => {
+        const asset = await assets(c.req.raw);
+        // Fetch responses have immutable headers; middleware adds security headers.
+        return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers: asset.headers });
+      });
     }
   }
 
