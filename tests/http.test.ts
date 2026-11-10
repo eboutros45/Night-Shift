@@ -31,3 +31,24 @@ it("accepts LAN login forms but still blocks foreign and null origins",async()=>
   expect(response.status,origin).toBe(status);
  }
 });
+
+it("shows a stable result with Scan next ticket instead of the scanner after admission", async () => {
+  const e = await makeEvent([{ capacity: 5 }]);
+  const order = await orders.reserve(e.slug, buyer(e.waveIds[0]!), T0);
+  await orders.submitProof(order.accessToken, null, "paid", T0 + 1);
+  await orders.approve(order.id, "admin-1", T0 + 2);
+  const ticket = (await orders.getById(order.id))!.tickets[0]!;
+  const user = (await db().select().from(users).limit(1))[0]!;
+  const app = createApp();
+  const response = await withAccessUser(user, () => app.request(`http://localhost:3000/admin/door/${e.eventId}`, {
+    method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code: ticket.token }),
+  }));
+  const html = await response.text();
+  expect(response.status).toBe(200);
+  expect(html).toContain("ADMIT");
+  expect(html).toContain("Scan next ticket");
+  expect(html).not.toContain('id="scan-form"');
+  expect(html).not.toContain('id="reader"');
+  const next = await withAccessUser(user, () => app.request(`http://localhost:3000/admin/door/${e.eventId}`));
+  expect(await next.text()).toContain('id="scan-form"');
+});

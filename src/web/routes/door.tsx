@@ -39,7 +39,7 @@ export function describe(o: ScanOutcome) {
 }
 
 const Result: FC<{ o?: ScanOutcome }> = ({ o }) => (
-  <div id="result" role="status" class={`scan-result ${!o ? "" : o.result === "ADMITTED" ? "ok" : "bad"}`}>
+  <div id="result" role="status" tabindex={-1} class={`scan-result ${!o ? "" : o.result === "ADMITTED" ? "ok" : "bad"}`}>
     <b>{o ? (o.result === "ADMITTED" ? "✓ ADMIT" : "✕ " + o.result.replace("_", " ")) : "Ready"}</b>
     <span>{o ? describe(o) : "Scan a QR or type the code"}</span>
   </div>
@@ -119,6 +119,7 @@ async function ScanPage({ eventId, title, user, o }: { eventId: string; title: s
       <div style="max-width:560px;margin:0 auto">
         <DoorHeader eventId={eventId} title={title} mode="scan" />
         <Result o={o} />
+        {o ? <a id="scan-next" class="btn primary lg block" href={`/admin/door/${eventId}`}>Scan next ticket</a> : <>
         <form method="post" id="scan-form" data-event={eventId} class="row">
           <input name="code" id="code" autofocus autocomplete="off" placeholder="Ticket code" required style="flex:1;width:auto;font-size:18px;padding:12px" />
           <button class="primary lg">Check in</button>
@@ -127,6 +128,7 @@ async function ScanPage({ eventId, title, user, o }: { eventId: string; title: s
           📷 Start camera
         </button>
         <div id="reader" style="margin-top:12px;border-radius:var(--r);overflow:hidden"></div>
+        </>}
         <div class="card flush" style="margin-top:20px">
           <h2>Last scans</h2>
           <table id="recent">

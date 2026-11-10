@@ -1,72 +1,64 @@
-// Camera scanning for /admin/door/:eventId. Progressive enhancement: without this file the
-// plain form still works. Same QR seen again within 3s is ignored (camera sees it every frame).
+// Accept one QR, stop the camera, and navigate to the server-rendered result.
 (() => {
   const form = document.getElementById("scan-form");
-  const toggle = document.getElementById("cam-toggle");
   const result = document.getElementById("result");
-  const counts = document.getElementById("counts");
-  const input = document.getElementById("code");
-  if (!form || !window.Html5Qrcode) return;
-  const eventId = form.dataset.event;
-  let scanner = null;
-  let last = { code: "", at: 0 };
-  let busy = false;
-
-  async function submit(code) {
-    if (busy) return;
-    busy = true;
-    try {
-      const res = await fetch(`/admin/door/${eventId}/scan.json`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code }),
-      });
-      const o = await res.json();
-      const ok = o.result === "ADMITTED";
-      result.className = `scan-result ${ok ? "ok" : "bad"}`;
-      result.innerHTML = "";
-      const b = document.createElement("b");
-      b.textContent = ok ? "✓ ADMIT" : `✕ ${o.result.replace("_", " ")}`;
-      const s = document.createElement("span");
-      s.textContent = o.message;
-      result.append(b, s);
-      counts.textContent = `${o.counts.checkedIn} / ${o.counts.total}`;
-      if (navigator.vibrate) navigator.vibrate(o.result === "ADMITTED" ? 80 : [200, 100, 200]);
-    } catch {
-      result.textContent = "Network error, try again";
-    } finally {
-      busy = false;
+  if (!form) {
+    if (result && document.getElementById("scan-next")) {
+      result.focus();
+      result.scrollIntoView({ behavior: "auto", block: "center" });
     }
+    return;
+  }
+  const toggle = document.getElementById("cam-toggle");
+  const input = document.getElementById("code");
+  if (!toggle || !input || !window.Html5Qrcode) return;
+  let scanner = null;
+  let locked = false;
+  let changingCamera = false;
+
+  async function submitOnce(code) {
+    if (locked || !code.trim()) return;
+    // Lock synchronously: successive frames may decode before stop() completes.
+    locked = true;
+    toggle.disabled = true;
+    toggle.textContent = "Checking ticket…";
+    input.value = code;
+    if (scanner) {
+      try { scanner.pause(true); } catch { /* stop below still releases the camera */ }
+      try { await scanner.stop(); } catch { /* the lock still prevents a second submission */ }
+      scanner = null;
+    }
+    form.requestSubmit();
   }
 
-  // With the camera on, the typed form also goes through JSON so the camera keeps running.
-  form.addEventListener("submit", (e) => {
-    if (!scanner) return;
-    e.preventDefault();
-    submit(input.value);
-    input.value = "";
+  form.addEventListener("submit", (event) => {
+    if (!scanner || locked) return;
+    event.preventDefault();
+    void submitOnce(input.value);
   });
 
   toggle.hidden = false;
   toggle.addEventListener("click", async () => {
-    if (scanner) {
-      await scanner.stop();
-      scanner = null;
-      toggle.textContent = "📷 Start camera";
-      return;
-    }
-    scanner = new Html5Qrcode("reader");
+    if (locked || changingCamera) return;
+    changingCamera = true;
+    toggle.disabled = true;
     try {
-      await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (code) => {
-        const t = Date.now();
-        if (code === last.code && t - last.at < 3000) return;
-        last = { code, at: t };
-        submit(code);
-      });
-      toggle.textContent = "Stop camera";
-    } catch (err) {
+      if (scanner) {
+        await scanner.stop();
+        scanner = null;
+        toggle.textContent = "Start camera";
+        return;
+      }
+      scanner = new Html5Qrcode("reader");
+      await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (code) => { void submitOnce(code); });
+      if (!locked) toggle.textContent = "Stop camera";
+    } catch {
       scanner = null;
-      result.textContent = `Camera unavailable: ${err}`;
+      result.textContent = "Camera unavailable. Allow camera access or enter the ticket code below.";
+      input.focus();
+    } finally {
+      changingCamera = false;
+      toggle.disabled = locked;
     }
   });
 })();
