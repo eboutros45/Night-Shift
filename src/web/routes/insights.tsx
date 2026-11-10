@@ -332,13 +332,13 @@ insights.get("/email", async (c) => {
   return c.html(
     <Page title="Email" user={c.get("user")} path="/admin/email">
       <h1>Email</h1>
-      <p class="sub">How customer emails are sent. Settings live in <code>.env</code>; restart the server after changing them.</p>
+      <p class="sub">How customer emails are sent. Only settings for the selected provider are shown.</p>
       <Flash {...flash(c)} />
       <div class="cols even">
         <div class="card stack">
           <div class="spread">
             <h2 style="margin:0">Delivery</h2>
-            <span class={`pill ${e.provider === "smtp" ? "ok" : "warn"}`}>{e.provider === "smtp" ? "SENDING (SMTP)" : "CONSOLE ONLY"}</span>
+            <span class={`pill ${e.provider === "console" ? "warn" : "ok"}`}>{e.provider === "resend" ? "RESEND API" : e.provider === "smtp" ? "SMTP" : "CONSOLE ONLY"}</span>
           </div>
           <table class="kv">
             <tbody>
@@ -350,6 +350,8 @@ insights.get("/email", async (c) => {
                 <th>From</th>
                 <td class="mono small">{e.from}</td>
               </tr>
+              {e.provider === "resend" && <tr><th>Resend API key</th><td>{e.resendKey ? <span class="pill ok">CONFIGURED</span> : <span class="pill bad">NOT SET</span>}</td></tr>}
+              {e.provider === "smtp" && <>
               <tr>
                 <th>SMTP host</th>
                 <td class="mono small">
@@ -364,10 +366,11 @@ insights.get("/email", async (c) => {
                 <th>SMTP password</th>
                 <td>{e.smtp.pass ? <span class="pill ok">SET</span> : <span class="pill bad">NOT SET</span>}</td>
               </tr>
+              </>}
             </tbody>
           </table>
           <form method="post" action="/admin/email/verify">
-            <button>Check connection</button>
+            <button>{e.provider === "smtp" ? "Check connection" : "Check configuration"}</button>
           </form>
         </div>
         <div class="card">

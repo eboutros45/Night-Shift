@@ -49,3 +49,7 @@ Verification: run `npm run typecheck`, `npm test`, and `npm run build`. Tests co
 The PostgreSQL schema migrations create tables; they do **not** import the old SQLite database or upload local files. Keep `data/`, `data-backup/`, and `storage/` intact. A data import needs a separate backup, explicit column mapping, preserved IDs and tokens, and verification of row counts and uploaded objects before switching over. Do not delete the old data after merely running schema migrations.
 
 Local environment files, databases, uploads, dependencies, generated assets, and the old UI backup are excluded from version control.
+
+### Ticket QR renderer check
+
+Ticket email PNGs and PDFs must use the server entry of `qrcode`; the default package entry is replaced by the canvas/browser implementation when bundling Workers. To check the Worker runtime without sending mail or touching a database, run `npx wrangler dev --config tests/fixtures/qr-worker.jsonc --port 8791`, then request `http://127.0.0.1:8791`. Expect PNG signature `89504e470d0a1a0a`, width 600, SVG true, and a nonzero PDF size. Stop the local Worker afterward.

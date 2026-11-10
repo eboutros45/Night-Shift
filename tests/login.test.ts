@@ -159,3 +159,16 @@ it("rejects cross-site code verification and staff changes", async () => {
     expect(response.status).toBe(403);
   }
 });
+
+it("shows Resend diagnostics without misleading SMTP or console status", async () => {
+  const admin = (await db().select().from(users).limit(1))[0]!;
+  const page = await withAccessUser(admin, () => createApp().request("http://localhost:3000/admin/email"));
+  const html = await page.text();
+  expect(page.status).toBe(200);
+  expect(html).toContain("RESEND API");
+  expect(html).toContain("Resend API key");
+  expect(html).toContain("CONFIGURED");
+  expect(html).not.toContain("SMTP host");
+  expect(html).not.toContain("SMTP password");
+  expect(html).not.toContain("CONSOLE ONLY");
+});
