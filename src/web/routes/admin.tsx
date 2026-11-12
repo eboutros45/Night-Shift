@@ -4,8 +4,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../../db/client.ts";
 import { events as eventsT, orders as ordersT, tickets as ticketsT, waves as wavesT, type Event } from "../../db/schema.ts";
-import { compInput, eventInput, fieldErrors, lineupToText, waveInput } from "../../domain/inputs.ts";
-import { DomainError, ORDER_STATUSES, orderTier } from "../../domain/status.ts";
+import { compInput, eventInput, fieldErrors, lineupToText, voidInput, waveInput } from "../../domain/inputs.ts";
+import { DomainError, LIVE_ORDER_STATUSES, orderTier, PAY_LABEL } from "../../domain/status.ts";
 import { readStored, saveUpload } from "../../lib/storage.ts";
 import { epochToLocalInput, fmtDate, fmtDayShort, fmtDuration, fmtHourMin, fmtStamp, money } from "../../lib/time.ts";
 import { now } from "../../clock.ts";
@@ -16,7 +16,7 @@ import * as ticketsSvc from "../../services/tickets.ts";
 import * as limits from "../../lib/limits.ts";
 import { act, back, flash, form } from "../http.ts";
 import type { WaveView } from "../../domain/waves.ts";
-import { Empty, FieldErr, Flash, Flyer, Page, Status, Timeline } from "../layout.tsx";
+import { Empty, FieldErr, Flash, Flyer, Page, Status, statusLabel, Timeline } from "../layout.tsx";
 import { type Env } from "../session.ts";
 
 export const admin = new Hono<Env>();
@@ -24,7 +24,7 @@ export const admin = new Hono<Env>();
 // ---------- dashboard ----------
 
 admin.get("/", async (c) => {
-  const [list, awaiting] = await Promise.all([events.listAdmin(), orders.countByStatus(["AWAITING_PAYMENT"])]);
+  const [list, awaiting] = await Promise.all([events.listAdmin(), orders.unpaidTickets()]);
   const pending = list.reduce((n, entry) => n + entry.pendingOrders, 0);
   const issued = list.reduce((n, e) => n + e.ticketsIssued, 0);
   return c.html(
@@ -33,11 +33,11 @@ admin.get("/", async (c) => {
       <div class="stats">
         <a class={`stat ${pending ? "alert" : ""}`} href="/admin/payments">
           <b>{pending}</b>
-          <span>payments to verify</span>
+          <span>payment screenshots to check</span>
         </a>
-        <a class="stat" href="/admin/orders?status=AWAITING_PAYMENT">
+        <a class="stat" href="/admin/orders?status=CONFIRMED">
           <b>{awaiting}</b>
-          <span>holds awaiting payment</span>
+          <span>tickets not paid yet</span>
         </a>
         <div class="stat">
           <b>{issued}</b>
@@ -631,6 +631,7 @@ admin.get("/events/:id/attendees", async (c) => {
                 <th>Ticket</th>
                 <th>Order</th>
                 <th>Contact</th>
+                <th>Payment</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -651,6 +652,9 @@ admin.get("/events/:id/attendees", async (c) => {
                     <br />
                     {o.customerPhone}
                   </td>
+                  <td class="small">
+                    {t.paidAt !== null ? PAY_LABEL[t.paidVia ?? ""] ?? "Paid" : t.status === "REVOKED" ? "" : <span class="status warn">Not paid · {money(t.priceCents)}</span>}
+                  </td>
                   <td>
                     <Status s={t.status} />
                     {t.checkedInAt && <div class="small muted num">{fmtHourMin(t.checkedInAt)}</div>}
@@ -662,7 +666,7 @@ admin.get("/events/:id/attendees", async (c) => {
         </div>
         {rows.length === 0 && (
           <Empty title={q || state ? "No one matches" : "No tickets yet"}>
-            {q || state ? "Try another name, or clear the filters." : "Tickets appear here once payments are approved or guest list spots are added."}
+            {q || state ? "Try another name, or clear the filters." : "Guests appear here as soon as they confirm attendance or are added to the guest list."}
           </Empty>
         )}
       </div>
@@ -687,9 +691,9 @@ admin.get("/events/:id/attendees.csv", async (c) => {
     if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
     return `"${s.replace(/"/g, '""')}"`;
   };
-  const header = ["attendee", "email", "phone", "order", "ticket_type", "comp", "ticket_status", "checked_in_at", "ticket_id"];
+  const header = ["attendee", "email", "phone", "order", "ticket_type", "comp", "paid", "price", "ticket_status", "checked_in_at", "ticket_id"];
   const lines = rows.map(({ t, o, wave }) =>
-    [t.attendeeName, o.customerEmail, o.customerPhone, o.reference, orderTier(o, wave), o.isComp ? "yes" : "", t.status, t.checkedInAt ? fmtStamp(t.checkedInAt) : "", t.id]
+    [t.attendeeName, o.customerEmail, o.customerPhone, o.reference, orderTier(o, wave), o.isComp ? "yes" : "", t.paidAt !== null ? (t.paidVia ?? "paid").toLowerCase() : "unpaid", (t.priceCents / 100).toFixed(2), t.status, t.checkedInAt ? fmtStamp(t.checkedInAt) : "", t.id]
       .map(cell)
       .join(","),
   );
@@ -710,7 +714,7 @@ admin.get("/payments", async (c) => {
       <div class="head">
         <div>
           <h1>Payments to verify</h1>
-          <p class="sub">Oldest first. Match each proof to the Whish payment, then approve to issue tickets or reject with a reason.</p>
+          <p class="sub">Oldest first. Match each screenshot to the money you received, by name and phone. Approving marks the tickets paid; rejecting leaves them valid to pay at the door.</p>
         </div>
         {eventId && (
           <a class="btn sm" href="/admin/payments">
@@ -719,7 +723,7 @@ admin.get("/payments", async (c) => {
         )}
       </div>
       <Flash {...flash(c)} />
-      {list.length === 0 && <Empty title="All caught up">New payment proofs land here as buyers submit them.</Empty>}
+      {list.length === 0 && <Empty title="All caught up">Whish and Neo screenshots land here as guests send them.</Empty>}
       <div class="queue">
         {list.map(({ order: o, eventTitle, waveName }) => (
           <article class="card verify">
@@ -735,7 +739,7 @@ admin.get("/payments", async (c) => {
                   </a>
                 )
               ) : (
-                <span class="small muted">No file. Reference only.</span>
+                <span class="small muted">No screenshot on file.</span>
               )}
             </div>
             <div class="facts-col">
@@ -754,16 +758,18 @@ admin.get("/payments", async (c) => {
               <table class="kv">
                 <tbody>
                   <tr>
-                    <th>Buyer</th>
+                    <th>Paid with</th>
+                    <td>
+                      <strong>{PAY_LABEL[o.payMethod ?? "WHISH"]}</strong>
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Guest</th>
                     <td>{o.customerName}</td>
                   </tr>
                   <tr>
-                    <th>Whish number</th>
+                    <th>Phone</th>
                     <td class="num">{o.customerPhone}</td>
-                  </tr>
-                  <tr>
-                    <th>Whish reference</th>
-                    <td>{o.txnRef ? <code>{o.txnRef}</code> : <span class="muted">none given</span>}</td>
                   </tr>
                 </tbody>
               </table>
@@ -772,13 +778,13 @@ admin.get("/payments", async (c) => {
               <form method="post" action={`/admin/orders/${o.id}/approve`}>
                 <input type="hidden" name="back" value="/admin/payments" />
                 <button class="ok block">
-                  Approve, issue {o.quantity} ticket{o.quantity === 1 ? "" : "s"}
+                  Payment received, mark {o.quantity === 1 ? "ticket" : `${o.quantity} tickets`} paid
                 </button>
               </form>
               <form method="post" action={`/admin/orders/${o.id}/reject`} class="fields" style="gap:8px">
                 <input type="hidden" name="back" value="/admin/payments" />
-                <input name="reason" required placeholder="Reason the buyer will see" aria-label={`Reject reason for ${o.reference}`} />
-                <button class="danger block">Reject</button>
+                <input name="reason" required placeholder="Reason the guest will see" aria-label={`Reject reason for ${o.reference}`} />
+                <button class="danger block">Can't verify</button>
               </form>
             </div>
           </article>
@@ -809,7 +815,7 @@ admin.get("/orders", async (c) => {
       <Flash {...flash(c)} />
       <div class="chips">
         {chip(undefined, "All")}
-        {ORDER_STATUSES.map((s) => chip(s, s.replace("_", " ").toLowerCase()))}
+        {(["CONFIRMED", "PENDING_VERIFICATION", "APPROVED", "CANCELLED", "VOIDED"] as const).map((s) => chip(s, statusLabel(s)))}
       </div>
       <form method="get" class="row" style="margin-bottom:12px">
         {f.status && <input type="hidden" name="status" value={f.status} />}
@@ -821,7 +827,7 @@ admin.get("/orders", async (c) => {
             </option>
           ))}
         </select>
-        <input name="q" value={f.q ?? ""} placeholder="Search ref, name, email, phone, Whish ref" style="flex:1;min-width:200px;width:auto" />
+        <input name="q" value={f.q ?? ""} placeholder="Search ref, name, email or phone" style="flex:1;min-width:200px;width:auto" />
         <button>Search</button>
       </form>
       <div class="card flush">
@@ -833,13 +839,13 @@ admin.get("/orders", async (c) => {
                 <th>Created</th>
                 <th>Event and wave</th>
                 <th>Qty</th>
-                <th>Total</th>
-                <th>Customer</th>
+                <th>Paid</th>
+                <th>Guest</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {list.map(({ order: o, eventTitle, waveName, status }) => (
+              {list.map(({ order: o, eventTitle, waveName, status, ticketCount, paidCount }) => (
                 <tr data-href={`/admin/orders/${o.id}`}>
                   <td>
                     <a href={`/admin/orders/${o.id}`} class="mono">
@@ -853,11 +859,15 @@ admin.get("/orders", async (c) => {
                     <span class="muted">{orderTier(o, waveName)}</span>
                   </td>
                   <td>{o.quantity}</td>
-                  <td>{money(o.totalCents)}</td>
+                  <td class="small">
+                    {ticketCount === 0 ? <span class="muted">-</span> : paidCount === ticketCount ? <span class="status ok">Paid</span> : <span class="status warn">{paidCount} / {ticketCount}</span>}
+                    <br />
+                    <span class="muted">{money(o.totalCents)}</span>
+                  </td>
                   <td class="small">
                     {o.customerName}
                     <br />
-                    <span class="muted">{o.customerEmail}</span>
+                    <span class="muted">{o.customerPhone || o.customerEmail}</span>
                   </td>
                   <td>
                     <Status s={status} />
@@ -897,13 +907,13 @@ admin.get("/orders/:id", async (c) => {
           </p>
         </div>
         <div class="row">
-          {status === "APPROVED" && (
+          {LIVE_ORDER_STATUSES.includes(status) && o.tickets.length > 0 && (
             <form method="post" action={`${base}/resend`}>
               <button class="sm">Resend tickets email</button>
             </form>
           )}
           <a class="btn sm" href={`/o/${order.accessToken}`} target="_blank">
-            Customer view ↗
+            Guest view ↗
           </a>
         </div>
       </div>
@@ -912,7 +922,7 @@ admin.get("/orders/:id", async (c) => {
         <div>
           {status === "PENDING_VERIFICATION" && (
             <div class="card stack">
-              <h2>Verify payment</h2>
+              <h2>Check payment screenshot</h2>
               {order.proofKey ? (
                 order.proofMime === "application/pdf" ? (
                   <a class="btn" href={`${base}/proof`} target="_blank">
@@ -927,17 +937,16 @@ admin.get("/orders/:id", async (c) => {
                 <p class="muted">No file uploaded.</p>
               )}
               <p>
-                Whish ref: {order.txnRef ? <code>{order.txnRef}</code> : <span class="muted">none</span>}. Expected{" "}
-                <strong>{money(order.totalCents)}</strong>
+                Paid with <strong>{PAY_LABEL[order.payMethod ?? "WHISH"]}</strong> by {order.customerName} ({order.customerPhone}). Expected{" "}
+                <strong>{money(o.dueCents)}</strong>
+                {o.dueCents !== order.totalCents && <span class="muted"> (the rest was already paid at the door)</span>}
               </p>
               <form method="post" action={`${base}/approve`}>
-                <button class="ok lg">
-                  Approve and issue {order.quantity} ticket{order.quantity === 1 ? "" : "s"}
-                </button>
+                <button class="ok lg">Payment received, mark tickets paid</button>
               </form>
               <form method="post" action={`${base}/reject`} class="row">
-                <input name="reason" required placeholder="Reason shown to the customer" style="flex:1;width:auto" />
-                <button class="danger">Reject</button>
+                <input name="reason" required placeholder="Reason shown to the guest" style="flex:1;width:auto" />
+                <button class="danger">Can't verify</button>
               </form>
             </div>
           )}
@@ -948,6 +957,7 @@ admin.get("/orders/:id", async (c) => {
                 <thead>
                   <tr>
                     <th>Ticket</th>
+                    <th>Payment</th>
                     <th>Status</th>
                     <th>Checked in</th>
                     <th></th>
@@ -959,6 +969,18 @@ admin.get("/orders/:id", async (c) => {
                       <td>
                         {t.attendeeName}
                         <div class="mono small muted">{t.id.slice(0, 8)}</div>
+                      </td>
+                      <td class="small">
+                        {t.paidAt !== null ? (
+                          <>
+                            <span class="status ok">{PAY_LABEL[t.paidVia ?? ""] ?? "Paid"}</span>
+                            <div class="muted">{fmtStamp(t.paidAt).slice(5, 16)}</div>
+                          </>
+                        ) : t.status === "REVOKED" ? (
+                          ""
+                        ) : (
+                          <span class="status warn">Not paid · {money(t.priceCents)}</span>
+                        )}
                       </td>
                       <td>
                         <Status s={t.status} />
@@ -983,6 +1005,17 @@ admin.get("/orders/:id", async (c) => {
             <h2>Timeline</h2>
             <Timeline rows={o.timeline} />
           </div>
+          {(status === "CONFIRMED" || status === "PENDING_VERIFICATION") && (
+            <details class="card">
+              <summary>
+                <strong>Cancel this order</strong> <span class="muted small">no-show or fake sign-up</span>
+              </summary>
+              <form method="post" action={`${base}/cancel`} class="row" style="margin-top:14px" data-confirm="Cancel this order? Its tickets stop working and the spots go back on offer.">
+                <input name="reason" required maxlength={200} placeholder="Reason (the guest sees it on their ticket page)" style="flex:1;width:auto" />
+                <button class="danger">Cancel order</button>
+              </form>
+            </details>
+          )}
         </div>
         <div>
           <div class="card flush">
@@ -990,15 +1023,16 @@ admin.get("/orders/:id", async (c) => {
               <tbody>
                 {(
                   [
-                    ["Customer", order.customerName],
+                    ["Guest", order.customerName],
                     ["Email", order.customerEmail],
                     ["Phone", order.customerPhone],
                     ["Unit price", money(order.unitPriceCents)],
                     ["Created", fmtStamp(order.createdAt).slice(0, 19)],
-                    ["Hold expires", order.expiresAt ? fmtStamp(order.expiresAt).slice(0, 19) : "-"],
-                    ["Proof submitted", order.submittedAt ? fmtStamp(order.submittedAt).slice(0, 19) : "-"],
+                    ["Still to pay", money(o.dueCents)],
+                    ["Paying with", order.payMethod ? PAY_LABEL[order.payMethod] ?? order.payMethod : "-"],
+                    ["Screenshot sent", order.submittedAt ? fmtStamp(order.submittedAt).slice(0, 19) : "-"],
                     ["Decided", order.decidedAt ? fmtStamp(order.decidedAt).slice(0, 19) : "-"],
-                    ["Reject reason", order.rejectReason ?? "-"],
+                    ["Reason given", order.rejectReason ?? "-"],
                     ["Stored status", order.status],
                   ] as const
                 ).map(([k, v]) => (
@@ -1031,7 +1065,10 @@ admin.post("/orders/:id/approve", async (c) => {
   const to = afterAction(await form(c), id);
   try {
     const r = (await orders.approve(id, c.get("user").id));
-    return back(c, to, { ok: r.alreadyApproved ? "Already approved; nothing changed." : "Approved. Tickets issued and emailed." });
+    const n = r.newlyPaid;
+    return back(c, to, {
+      ok: r.alreadyApproved ? "Already verified; nothing changed." : n ? `Verified. ${n} ticket${n === 1 ? "" : "s"} marked paid and the guest was emailed.` : "Verified, but these tickets were already paid in cash at the door; nothing changed.",
+    });
   } catch (e) {
     if (e instanceof DomainError) return back(c, to, { err: e.message });
     throw e;
@@ -1041,7 +1078,14 @@ admin.post("/orders/:id/approve", async (c) => {
 admin.post("/orders/:id/reject", async (c) => {
   const id = c.req.param("id");
   const f = await form(c);
-  return (await act(c, afterAction(f, id), async () => (await orders.reject(id, c.get("user").id, f.reason ?? "")), "Rejected. Customer notified; tickets back on sale."));
+  return (await act(c, afterAction(f, id), async () => (await orders.reject(id, c.get("user").id, f.reason ?? "")), "Screenshot rejected. The guest was emailed; their ticket still works and they can pay at the door."));
+});
+
+admin.post("/orders/:id/cancel", async (c) => {
+  const id = c.req.param("id");
+  const parsed = voidInput.safeParse(await form(c));
+  if (!parsed.success) return back(c, `/admin/orders/${id}`, { err: "Give a reason for cancelling." });
+  return (await act(c, `/admin/orders/${id}`, async () => (await orders.cancel(id, c.get("user").id, parsed.data.reason)), "Order cancelled. Its tickets no longer work and the spots are free again."));
 });
 
 admin.post("/orders/:id/resend", async (c) => {

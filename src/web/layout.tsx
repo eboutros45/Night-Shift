@@ -246,6 +246,19 @@ main{flex:1}
 .qr{background:#fff;padding:10px;border-radius:6px;width:176px}
 .qr svg{display:block;width:100%;height:auto}
 .amount{font-stretch:62%;font-weight:900;font-size:clamp(3.4rem,8vw,5rem);line-height:.9;font-variant-numeric:tabular-nums}
+.paychoices{margin-top:44px}
+.paygrid{display:grid;gap:16px}
+@media(min-width:760px){.paygrid{grid-template-columns:1fr 1.3fr;align-items:start}}
+.paygrid .card{margin:0}
+.paygrid .amount{font-size:clamp(2.8rem,7vw,3.8rem);margin:6px 0 12px}
+.seg label{position:relative;cursor:pointer;margin:0}
+.seg label input{position:absolute;opacity:0;width:1px;height:1px}
+.seg label span{display:block;text-align:center;padding:11px 8px;border-radius:999px;color:var(--fog);font-weight:600}
+.seg label input:checked+span{background:var(--bone);color:#000}
+.seg label input:focus-visible+span{outline:2px solid var(--sodium);outline-offset:2px}
+.paytag{display:inline-block;padding:5px 12px;border-radius:999px;font-size:.8rem;font-weight:700;border:1.5px solid}
+.paytag.paid{color:#1e6b2a;background:#1e6b2a14}
+.paytag.due{color:#8a4b00;background:#ffb23833}
 .countdown{font-variant-numeric:tabular-nums;font-weight:700}
 .countdown.urgent{color:var(--bad)}
 
@@ -345,11 +358,30 @@ a.card:hover{border-color:var(--line-2)}
 .ev-row{display:flex;gap:14px;align-items:center;min-width:240px}
 details{position:relative}
 .card.pop{position:absolute;right:0;top:calc(100% + 8px);z-index:15;width:min(580px,88vw);margin:0;box-shadow:0 24px 60px #000;text-align:left;white-space:normal}
-.scan-result{border-radius:10px;padding:30px 20px;text-align:center;margin-bottom:18px;border:1px solid var(--line);background:var(--char)}
-.scan-result b{display:block;font-stretch:62%;font-weight:900;text-transform:uppercase;font-size:3.4rem;line-height:.9;margin-bottom:6px}
+.door{max-width:560px;margin:0 auto}
+.scan-result{border-radius:14px;padding:34px 20px;text-align:center;margin-bottom:14px;border:2px solid var(--line);background:var(--char);display:grid;gap:6px;justify-items:center}
+.scan-result small{font:700 .82rem var(--mono);text-transform:uppercase;letter-spacing:.12em}
+.scan-result b{display:block;font-stretch:62%;font-weight:900;text-transform:uppercase;font-size:clamp(3.4rem,17vw,5.2rem);line-height:.88}
+.scan-result strong{font-size:1.5rem;line-height:1.15;color:var(--bone);overflow-wrap:anywhere}
+.scan-result span{color:var(--bone);max-width:34ch;opacity:.85}
+.scan-result.idle{padding:20px;border-style:dashed}.scan-result.idle b{font-size:2.2rem;color:var(--fog)}.scan-result.idle span{color:var(--fog)}
 .scan-result.ok{background:#0d2412;border-color:var(--ok);color:var(--ok)}
+.scan-result.due{background:#2b1c00;border-color:var(--sodium);color:var(--sodium)}
 .scan-result.bad{background:#2a0d0a;border-color:var(--bad);color:var(--bad)}
-.scan-result.ok span,.scan-result.bad span{color:var(--bone)}
+.scan-actions{display:grid;gap:10px}
+.scan-actions button,#scan-next{min-height:64px;font-size:1.2rem}
+.reader{border-radius:14px;overflow:hidden;margin-bottom:12px;background:var(--char)}
+.reader:empty{display:none}
+.reader video{display:block;width:100%!important}
+.door-tools{display:grid;gap:14px;margin-top:22px}
+.door-tools .row{flex-wrap:nowrap}.door-tools .row input{flex:1;min-width:0;width:auto;font-size:1rem;padding:13px 14px}
+.typed summary{cursor:pointer;color:var(--fog);font-size:.9rem;padding:6px 0}
+.typed[open] summary{margin-bottom:10px}
+.guests{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.guest{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--char)}
+.guest:last-child{border-bottom:0}
+.guest>div{display:grid;gap:2px;min-width:0}
+.guest strong{font-size:1.05rem;overflow-wrap:anywhere}
 
 /* ---------- door: mode switch + walk-ins ---------- */
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;border:1px solid var(--line-2);border-radius:999px;margin:0 0 18px}
@@ -409,14 +441,14 @@ const TONE: Record<string, "ok" | "bad" | "warn" | "info" | ""> = {
   APPROVED: "ok", VALID: "ok", ON_SALE: "ok", ADMITTED: "ok", CHECKED_IN: "ok", published: "ok", open: "ok",
   REJECTED: "bad", EXPIRED: "bad", VOIDED: "bad", REVOKED: "bad", SOLD_OUT: "bad", INVALID: "bad", WRONG_EVENT: "bad", ALREADY_USED: "bad",
   SALES_CLOSED: "bad", CLOSED: "bad",
-  AWAITING_PAYMENT: "warn",
+  AWAITING_PAYMENT: "warn", PAYMENT_DUE: "warn", CONFIRMED: "ok", CANCELLED: "bad",
   PENDING_VERIFICATION: "info",
 };
 const LABEL: Record<string, string> = {
-  APPROVED: "Approved", VALID: "Valid", ON_SALE: "On sale", ADMITTED: "Admitted", CHECKED_IN: "Checked in", published: "Published",
+  APPROVED: "Payment verified", CONFIRMED: "Confirmed", CANCELLED: "Cancelled", PAYMENT_DUE: "Not paid", VALID: "Valid", ON_SALE: "On sale", ADMITTED: "Admitted", CHECKED_IN: "Checked in", published: "Published",
   REJECTED: "Rejected", EXPIRED: "Expired", VOIDED: "Voided", REVOKED: "Revoked", SOLD_OUT: "Sold out", INVALID: "Invalid", WRONG_EVENT: "Wrong event",
   ALREADY_USED: "Already used", SALES_CLOSED: "Sales closed", CLOSED: "Closed", AWAITING_PAYMENT: "Awaiting payment",
-  UPCOMING: "Upcoming", draft: "Draft", PENDING_VERIFICATION: "Verifying",
+  UPCOMING: "Upcoming", draft: "Draft", PENDING_VERIFICATION: "Screenshot to check",
 };
 export const statusLabel = (s: string) => LABEL[s] ?? s;
 
@@ -595,7 +627,9 @@ export const Page: FC<PageProps> = ({ title, user, path = "", head, bodyClass, c
               <a href="/" class={path === "/" ? "on" : ""}>
                 Events
               </a>
-              <a href="/account">My tickets</a>
+              <a href="/account" class={path === "/account" ? "on" : ""}>
+                My tickets
+              </a>
               <a href="/admin/login">MGMT</a>
             </nav>
           </div>
@@ -607,7 +641,7 @@ export const Page: FC<PageProps> = ({ title, user, path = "", head, bodyClass, c
           <div class="wrap">
             <div>
               <Wordmark href="/" />
-              <p style="margin-top:14px">Club nights, concerts and private parties in Beirut. Pay with Whish, get your QR ticket by email.</p>
+              <p style="margin-top:14px">Club nights, concerts and private parties in Beirut. Get your QR ticket in seconds. Pay by Whish, Neo or at the door.</p>
             </div>
             <div>
               <h3>Going out</h3>
@@ -616,7 +650,10 @@ export const Page: FC<PageProps> = ({ title, user, path = "", head, bodyClass, c
                   <a href="/">Upcoming events</a>
                 </li>
                 <li>
-                  <a href={`mailto:${config.brand.supportEmail}`}>Help with an order</a>
+                  <a href="/account">Find my tickets</a>
+                </li>
+                <li>
+                  <a href={`mailto:${config.brand.supportEmail}`}>Help with a ticket</a>
                 </li>
               </ul>
             </div>

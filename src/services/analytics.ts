@@ -81,9 +81,10 @@ export async function eventStats(eventId: string) {
   const funnel = [
     { step: "Visitors on event page", n: (await views("EVENT_VIEW")) },
     { step: "Visitors who opened checkout", n: (await views("CHECKOUT_START")) },
-    { step: "Orders created", n: (await journalCount("ORDER_CREATED")) },
-    { step: "Payment proofs submitted", n: (await journalCount("PROOF_SUBMITTED")) },
-    { step: "Orders approved", n: (await journalCount("ORDER_APPROVED")) },
+    { step: "Confirmed attendance", n: (await journalCount("ORDER_CONFIRMED")) + (await journalCount("ORDER_CREATED")) },
+    { step: "Sent a payment screenshot", n: (await journalCount("PROOF_SUBMITTED")) },
+    { step: "Payments verified", n: (await journalCount("ORDER_APPROVED")) },
+    { step: "Paid cash at the door", n: (await journalCount("PAYMENT_COLLECTED")) },
   ];
 
   const byStatus = (await db()
@@ -92,13 +93,24 @@ export async function eventStats(eventId: string) {
       .where(and(eq(orders.eventId, eventId), eq(orders.isComp, false)))
       .groupBy(orders.status));
 
+  // Per tier, counted on tickets: money is "in" once a ticket is verified or paid in cash.
+  // RECEIPT_SEEN (let in on trust at the door) still counts as owed until an admin verifies it.
+  const inWave = sql`from tickets t join orders o on o.id = t.order_id where o.wave_id = ${waves.id} and t.status <> 'REVOKED'`;
+  const settled = sql`t.paid_at is not null and t.paid_via <> 'RECEIPT_SEEN'`;
   const byWave = (await db()
-      .select({ wave: waves.name, price: waves.priceCents, capacity: waves.capacity, sold: sum(orders.quantity), revenue: sum(orders.totalCents) })
+      .select({
+        wave: waves.name,
+        price: waves.priceCents,
+        capacity: waves.capacity,
+        sold: sql<number>`(select count(*) ${inWave})`,
+        paid: sql<number>`(select count(*) ${inWave} and ${settled})`,
+        revenue: sql<number>`(select coalesce(sum(t.price_cents), 0) ${inWave} and ${settled})`,
+        owed: sql<number>`(select coalesce(sum(t.price_cents), 0) ${inWave} and not (${settled}))`,
+      })
       .from(waves)
-      .leftJoin(orders, and(eq(orders.waveId, waves.id), eq(orders.status, "APPROVED")))
       .where(eq(waves.eventId, eventId))
-      .groupBy(waves.id)
-      .orderBy(waves.position));
+      .orderBy(waves.position))
+    .map((w) => ({ ...w, sold: Number(w.sold), paid: Number(w.paid), revenue: Number(w.revenue), owed: Number(w.owed) }));
 
   const comps = (await db()
       .select({ n: sum(orders.quantity) })

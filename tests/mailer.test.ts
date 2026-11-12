@@ -3,7 +3,7 @@ import { tx } from "../src/db/client.ts";
 import { feed } from "../src/services/journal.ts";
 import { flushMail, queue } from "../src/services/mailer.ts";
 import * as orders from "../src/services/orders.ts";
-import { buyer, freshDb, makeEvent, T0 } from "./helpers.ts";
+import { buyer, freshDb, makeEvent, T0, screenshot } from "./helpers.ts";
 
 let logs: string[] = [];
 beforeEach(async () => {
@@ -16,8 +16,8 @@ afterEach(async () => (await flushMail()));
 
 async function approvedOrder() {
   const e = (await makeEvent([{ capacity: 5 }]));
-  const o = (await orders.reserve(e.slug, buyer(e.waveIds[0]!, 2), T0));
-  await orders.submitProof(o.accessToken, null, "WH-1", T0 + 1);
+  const o = (await orders.confirm(e.slug, buyer(e.waveIds[0]!, 2), T0));
+  await orders.submitProof(o.accessToken, screenshot(), "WHISH", T0 + 1);
   (await orders.approve(o.id, "admin-1", T0 + 2));
   await flushMail();
   return o;
@@ -26,7 +26,7 @@ async function approvedOrder() {
 it("sends the tickets email after commit with the PDF attached", async () => {
   const o = await approvedOrder();
   const sent = (await feed({ action: "EMAIL_SENT" })).map((r) => r.parsed);
-  expect(sent.map((d) => d?.template).sort()).toEqual(["order_placed", "tickets_issued"]);
+  expect(sent.map((d) => d?.template).sort()).toEqual(["payment_verified", "tickets_issued"]);
   // The PDF plus one inline QR image per ticket (shown in the email body).
   expect(sent.find((d) => d?.template === "tickets_issued")?.attachments).toEqual([
     `${o.reference}-tickets.pdf`,

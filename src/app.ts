@@ -11,7 +11,7 @@ import { admin } from "./web/routes/admin.tsx";
 import { door } from "./web/routes/door.tsx";
 import { insights } from "./web/routes/insights.tsx";
 import { pub } from "./web/routes/public.tsx";
-import { customerAuth } from "./web/routes/customer-auth.tsx";
+import { account } from "./web/routes/customer-auth.tsx";
 import { auth } from "./web/routes/auth.tsx";
 import { staff } from "./web/routes/staff.tsx";
 import { currentUser, requireRole, type Env } from "./web/session.ts";
@@ -58,7 +58,14 @@ export function createApp(assets?: (request: Request) => Promise<Response>) {
   // Cap request bodies BEFORE they are read: uploads get room for a 5 MB file, everything else is tiny.
   const UPLOAD_PATH = /^\/o\/[^/]+\/proof$|^\/admin\/events\/[^/]+\/poster$/;
   const small = bodyLimit({ maxSize: 100 * 1024, onError: (c) => c.text("Request too large.", 413) });
-  const upload = bodyLimit({ maxSize: config.uploadLimitBytes + 512 * 1024, onError: (c) => c.text("File too large (max 5 MB).", 413) });
+  // A guest who picked a huge photo lands back on their ticket with a plain message, not a bare error page.
+  const upload = bodyLimit({
+    maxSize: config.uploadLimitBytes + 512 * 1024,
+    onError: (c) => {
+      const order = c.req.path.match(/^\/o\/([^/]+)\/proof$/)?.[1];
+      return order ? c.redirect(`/o/${order}?err=${encodeURIComponent("That file is too big. Send a screenshot of 5 MB or less.")}#pay`, 303) : c.text("File too large (max 5 MB).", 413);
+    },
+  });
   app.use("*", (c, next) => (UPLOAD_PATH.test(c.req.path) ? upload : small)(c, next));
 
   app.use("*", async (c, next) => {
@@ -82,7 +89,7 @@ export function createApp(assets?: (request: Request) => Promise<Response>) {
     }
   }
 
-  app.route("/", customerAuth);
+  app.route("/", account);
   app.route("/admin", auth);
   app.route("/admin", staff);
   app.route("/", pub);

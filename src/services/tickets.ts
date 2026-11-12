@@ -58,7 +58,7 @@ async function logScan(t: Tx, eventId: string, actor: string, at: number, o: Sca
         from: admitted ? "VALID" : null,
         to: admitted ? "CHECKED_IN" : null,
         at,
-        data: { result: o.result, ...(o.ticketId ? {} : { code: (code ?? "").slice(0, 40) }), ...(o.result === "PAYMENT_DUE" ? { dueCents: o.dueCents } : {}) },
+        data: { result: o.result, ...(o.ticketId ? { name: o.attendeeName } : { code: (code ?? "").slice(0, 40) }), ...(o.result === "PAYMENT_DUE" ? { dueCents: o.dueCents } : {}) },
       }));
   return o;
 }

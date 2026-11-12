@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.ts";
-import { freshDb, makeEvent, buyer, T0 } from "./helpers.ts";
+import { freshDb, makeEvent, buyer, T0, screenshot } from "./helpers.ts";
 import { withAccessUser } from "../src/web/session.ts";
 import { db } from "../src/db/client.ts";
 import { users } from "../src/db/schema.ts";
@@ -12,8 +12,8 @@ afterEach(async () => { await flushMail(); vi.useRealTimers(); vi.restoreAllMock
 
 it("serves every internal page linked from populated admin and customer workflows", async () => {
   const event = await makeEvent([{ capacity: 10 }]);
-  const order = await orders.reserve(event.slug, buyer(event.waveIds[0]!), T0);
-  await orders.submitProof(order.accessToken, null, "payment", T0 + 1);
+  const order = await orders.confirm(event.slug, buyer(event.waveIds[0]!), T0);
+  await orders.submitProof(order.accessToken, screenshot(), "WHISH", T0 + 1);
   await orders.approve(order.id, "admin-1", T0 + 2);
   const user = (await db().select().from(users).limit(1))[0]!;
   const app = createApp();

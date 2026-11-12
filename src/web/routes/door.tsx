@@ -1,7 +1,8 @@
 // The door, for ADMIN and SCANNER staff. Two modes, each on its own page so one phone can stay
 // on one job all night:
-//  - Scan: check tickets in. Works without JavaScript (type/paste the code and submit); with JS,
-//    /door.js runs the camera and posts to the JSON endpoint so the camera keeps running.
+//  - Scan: check tickets in. A paid ticket is admitted by the scan; an unpaid one shows what to
+//    collect and a "Cash received · Admit" button. Guests without their QR can be found by name
+//    or phone. Works without JavaScript (type the code); with JS, /door.js runs the camera.
 //  - Walk-ins: log cash sales at the door (services/door-sales.ts), with cash totals per staff.
 import { Hono } from "hono";
 import type { FC } from "hono/jsx";
@@ -10,11 +11,12 @@ import { now } from "../../clock.ts";
 import { db } from "../../db/client.ts";
 import { events as eventsT } from "../../db/schema.ts";
 import { doorSaleInput, fieldErrors, voidInput } from "../../domain/inputs.ts";
-import { DomainError } from "../../domain/status.ts";
+import { DomainError, PAY_LABEL } from "../../domain/status.ts";
 import { fmtClock, fmtDate, fmtStamp, money } from "../../lib/time.ts";
 import * as doorSales from "../../services/door-sales.ts";
 import { feed } from "../../services/journal.ts";
-import { checkIn, doorCounts, type ScanOutcome } from "../../services/tickets.ts";
+import * as attendees from "../../services/attendees.ts";
+import { checkIn, collectAndAdmit, doorCash, doorCounts, type ScanOutcome } from "../../services/tickets.ts";
 import { back, flash, form } from "../http.ts";
 import { asset, Empty, Flash, Page, Status } from "../layout.tsx";
 import type { Env } from "../session.ts";
@@ -23,14 +25,19 @@ export const door = new Hono<Env>();
 
 const getEvent = (id: string) => db().query.events.findFirst({ where: (e, { eq }) => eq(e.id, id) });
 
+/** One line for logs and the JSON endpoint. The screen itself uses <Result>. */
 export function describe(o: ScanOutcome) {
   switch (o.result) {
     case "ADMITTED":
       return `Let in: ${o.attendeeName}`;
+    case "PAYMENT_DUE":
+      return o.proofPending
+        ? `${PAY_LABEL[o.payMethod ?? "WHISH"]} payment not verified yet: ${money(o.dueCents ?? 0)} (${o.attendeeName})`
+        : `Not paid: collect ${money(o.dueCents ?? 0)} (${o.attendeeName})`;
     case "ALREADY_USED":
       return `Already used at ${fmtClock(o.checkedInAt)} (${o.attendeeName})`;
     case "REVOKED":
-      return `Revoked: ${o.reason ?? "no reason"} (${o.attendeeName})`;
+      return `Cancelled: ${o.reason ?? "no reason"} (${o.attendeeName})`;
     case "WRONG_EVENT":
       return `Ticket is for ${o.otherEvent}`;
     default:
@@ -38,12 +45,81 @@ export function describe(o: ScanOutcome) {
   }
 }
 
-const Result: FC<{ o?: ScanOutcome }> = ({ o }) => (
-  <div id="result" role="status" tabindex={-1} class={`scan-result ${!o ? "" : o.result === "ADMITTED" ? "ok" : "bad"}`}>
-    <b>{o ? (o.result === "ADMITTED" ? "✓ ADMIT" : "✕ " + o.result.replace("_", " ")) : "Ready"}</b>
-    <span>{o ? describe(o) : "Scan a QR or type the code"}</span>
-  </div>
-);
+/** What the doorman reads at arm's length: a colour, two or three words, then the name. */
+function verdict(o: ScanOutcome): { tone: "ok" | "due" | "bad"; kicker: string; headline: string; detail: string } {
+  switch (o.result) {
+    case "ADMITTED":
+      return {
+        tone: "ok",
+        kicker: o.paidVia === "CASH" ? "Cash collected" : o.paidVia === "RECEIPT_SEEN" ? "Receipt seen" : o.paidVia === "COMP" ? "Free entry" : `Paid · ${PAY_LABEL[o.paidVia ?? ""] ?? "verified"}`,
+        headline: "✓ Admit",
+        detail: "Let them in.",
+      };
+    case "PAYMENT_DUE":
+      return o.proofPending
+        ? {
+            tone: "due",
+            kicker: `${PAY_LABEL[o.payMethod ?? "WHISH"]} not verified`,
+            headline: money(o.dueCents ?? 0),
+            detail: `They sent a ${PAY_LABEL[o.payMethod ?? "WHISH"]} screenshot we haven't checked yet. Ask to see the receipt on their phone, or take cash.`,
+          }
+        : { tone: "due", kicker: "Not paid", headline: `Collect ${money(o.dueCents ?? 0)}`, detail: "Take the cash, then tap the button to let them in." };
+    case "ALREADY_USED":
+      return { tone: "bad", kicker: "Do not admit", headline: "Already used", detail: `This ticket was scanned at ${fmtClock(o.checkedInAt)}.` };
+    case "REVOKED":
+      return { tone: "bad", kicker: "Do not admit", headline: "Cancelled", detail: o.reason ?? "This ticket was cancelled." };
+    case "WRONG_EVENT":
+      return { tone: "bad", kicker: "Do not admit", headline: "Wrong event", detail: `This ticket is for ${o.otherEvent}.` };
+    default:
+      return { tone: "bad", kicker: "Do not admit", headline: "Not a ticket", detail: "This isn't a Night Shift ticket. Try scanning again, or find the guest by name." };
+  }
+}
+
+const Result: FC<{ o?: ScanOutcome }> = ({ o }) => {
+  if (!o)
+    return (
+      <div id="result" role="status" tabindex={-1} class="scan-result idle">
+        <b>Ready</b>
+        <span>Point the camera at a ticket's QR code</span>
+      </div>
+    );
+  const v = verdict(o);
+  return (
+    <div id="result" role="status" tabindex={-1} class={`scan-result ${v.tone}`} data-tone={v.tone}>
+      <small>{v.kicker}</small>
+      <b>{v.headline}</b>
+      {o.attendeeName && <strong>{o.attendeeName}</strong>}
+      <span>{v.detail}</span>
+    </div>
+  );
+};
+
+/** What to press after a scan. Unpaid tickets get the collect buttons; everything else goes back to scanning. */
+const Actions: FC<{ eventId: string; o: ScanOutcome }> = ({ eventId, o }) => {
+  const next = `/admin/door/${eventId}`;
+  if (o.result !== "PAYMENT_DUE" || !o.ticketId)
+    return (
+      <a id="scan-next" class={`btn lg block ${o.result === "ADMITTED" ? "primary" : "solid"}`} href={next} data-auto={o.result === "ADMITTED" ? "2500" : undefined}>
+        Scan next ticket
+      </a>
+    );
+  return (
+    <form method="post" action={`/admin/door/${eventId}/collect`} class="scan-actions">
+      <input type="hidden" name="ticketId" value={o.ticketId} />
+      <button id="scan-primary" class="ok lg block" name="via" value="CASH" data-busy-label="Letting in…">
+        Cash received · Admit
+      </button>
+      {o.proofPending && (
+        <button class="lg block" name="via" value="RECEIPT_SEEN" data-busy-label="Letting in…">
+          Receipt seen · Admit
+        </button>
+      )}
+      <a class="btn ghost block" href={next}>
+        Cancel, don't admit
+      </a>
+    </form>
+  );
+};
 
 door.get("/", async (c) => {
   const upcoming = (await db()
@@ -112,41 +188,103 @@ async function DoorHeader({ eventId, title, mode }: { eventId: string; title: st
   );
 }
 
-async function ScanPage({ eventId, title, user, o }: { eventId: string; title: string; user: User; o?: ScanOutcome }) {
-  const recent = (await feed({ eventId, action: "SCAN", limit: 15 }));
+type Guest = Awaited<ReturnType<typeof attendees.list>>[number];
+
+/** For guests who can't show their QR: look them up by name or phone and check them in from the list. */
+const GuestRow: FC<{ eventId: string; g: Guest }> = ({ eventId, g }) => {
+  const t = g.ticket;
+  const state =
+    t.status === "CHECKED_IN" ? { tone: "", text: `Inside since ${fmtClock(t.checkedInAt)}` }
+    : t.status === "REVOKED" ? { tone: "bad", text: "Cancelled" }
+    : t.paidAt !== null ? { tone: "ok", text: "Paid" }
+    : { tone: "warn", text: `Not paid · ${money(t.priceCents)}` };
+  return (
+    <li class="guest">
+      <div>
+        <strong>{t.attendeeName}</strong>
+        <span class="small muted">{g.order.customerPhone || g.order.reference}</span>
+        <span class={`status ${state.tone}`}>{state.text}</span>
+      </div>
+      {t.status === "VALID" && (
+        <form method="post" action={`/admin/door/${eventId}`}>
+          <input type="hidden" name="code" value={t.token} />
+          <button class={t.paidAt !== null ? "primary" : ""}>{t.paidAt !== null ? "Check in" : "Open"}</button>
+        </form>
+      )}
+    </li>
+  );
+};
+
+async function ScanPage({ eventId, title, user, o, q, err }: { eventId: string; title: string; user: User; o?: ScanOutcome; q?: string; err?: string }) {
+  const recent = (await feed({ eventId, action: "SCAN", limit: 12 }));
+  const found = q ? (await attendees.list(eventId, { q })).slice(0, 25) : null;
   return (
     <Page title={`Door | ${title}`} user={user} path="/admin/door" head={<script src="/static/html5-qrcode.min.js" defer></script>}>
-      <div style="max-width:560px;margin:0 auto">
+      <div class="door">
         <DoorHeader eventId={eventId} title={title} mode="scan" />
-        <Result o={o} />
-        {o ? <a id="scan-next" class="btn primary lg block" href={`/admin/door/${eventId}`}>Scan next ticket</a> : <>
-        <form method="post" id="scan-form" data-event={eventId} class="row">
-          <input name="code" id="code" autofocus autocomplete="off" placeholder="Ticket code" required style="flex:1;width:auto;font-size:18px;padding:12px" />
-          <button class="primary lg">Check in</button>
-        </form>
-        <button type="button" id="cam-toggle" class="lg block" style="margin-top:10px" hidden>
-          📷 Start camera
-        </button>
-        <div id="reader" style="margin-top:12px;border-radius:var(--r);overflow:hidden"></div>
-        </>}
-        <div class="card flush" style="margin-top:20px">
-          <h2>Last scans</h2>
-          <table id="recent">
-            <tbody>
-              {recent.map((r) => (
-                <tr>
-                  <td class="mono small">{fmtStamp(r.at).slice(11, 19)}</td>
-                  <td>
-                    <Status s={String(r.parsed?.result)} />
-                  </td>
-                  <td class="small">{r.actorName}</td>
-                  <td class="mono small muted">{r.entityId?.slice(0, 8) ?? String(r.parsed?.code ?? "").slice(0, 12)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {recent.length === 0 && <Empty>No scans yet.</Empty>}
-        </div>
+        <Flash err={err} />
+        {!found && <Result o={o} />}
+        {o && <Actions eventId={eventId} o={o} />}
+        {!o && !found && (
+          <>
+            <div id="reader" class="reader"></div>
+            <button type="button" id="cam-toggle" class="primary lg block" hidden>
+              Start camera
+            </button>
+          </>
+        )}
+        {!o && (
+          <div class="door-tools">
+            <form method="get" action={`/admin/door/${eventId}`} class="row" role="search">
+              <input name="q" value={q ?? ""} type="search" autocomplete="off" placeholder="Find guest by name or phone" aria-label="Find guest by name or phone" required minlength={2} />
+              <button>Find</button>
+            </form>
+            {found && (
+              <>
+                <ul class="guests">
+                  {found.map((g) => (
+                    <GuestRow eventId={eventId} g={g} />
+                  ))}
+                </ul>
+                {found.length === 0 && <Empty>No guest matches “{q}”. Try fewer letters or the last digits of their phone.</Empty>}
+                <a class="btn block" href={`/admin/door/${eventId}`}>
+                  Back to scanning
+                </a>
+              </>
+            )}
+            {!found && (
+              <details class="typed">
+                <summary>Type a ticket code instead</summary>
+                <form method="post" id="scan-form" data-event={eventId} class="row">
+                  <input name="code" id="code" autocomplete="off" autocapitalize="off" spellcheck={false} placeholder="Ticket code" aria-label="Ticket code" required />
+                  <button>Check</button>
+                </form>
+              </details>
+            )}
+          </div>
+        )}
+        {!found && (
+          <div class="card flush" style="margin-top:24px">
+            <h2>Last scans</h2>
+            <table id="recent">
+              <tbody>
+                {recent.map((r) => (
+                  <tr>
+                    <td class="mono small">{fmtStamp(r.at).slice(11, 16)}</td>
+                    <td>
+                      {String(r.parsed?.name ?? "") || <span class="muted">Unknown code</span>}
+                      <div class="small muted">{r.actorName}</div>
+                    </td>
+                    <td style="text-align:right">
+                      <Status s={String(r.parsed?.result)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {recent.length === 0 && <Empty>No scans yet.</Empty>}
+          </div>
+        )}
       </div>
       <script src={asset("door.js")} defer></script>
     </Page>
@@ -156,7 +294,8 @@ async function ScanPage({ eventId, title, user, o }: { eventId: string; title: s
 door.get("/:eventId", async (c) => {
   const ev = await getEvent(c.req.param("eventId"));
   if (!ev) return c.notFound();
-  return c.html(<ScanPage eventId={ev.id} title={ev.title} user={c.get("user")} />);
+  const q = c.req.query("q")?.trim().slice(0, 60);
+  return c.html(<ScanPage eventId={ev.id} title={ev.title} user={c.get("user")} q={q && q.length >= 2 ? q : undefined} />);
 });
 
 door.post("/:eventId", async (c) => {
@@ -164,6 +303,21 @@ door.post("/:eventId", async (c) => {
   if (!ev) return c.notFound();
   const o = (await checkIn(ev.id, (await form(c)).code ?? "", c.get("user").id));
   return c.html(<ScanPage eventId={ev.id} title={ev.title} user={c.get("user")} o={o} />);
+});
+
+/** The doorman took payment for an unpaid ticket: mark it paid and let the person in. */
+door.post("/:eventId/collect", async (c) => {
+  const ev = await getEvent(c.req.param("eventId"));
+  if (!ev) return c.notFound();
+  const f = await form(c);
+  const via = f.via === "RECEIPT_SEEN" ? "RECEIPT_SEEN" : "CASH";
+  try {
+    const o = (await collectAndAdmit(ev.id, f.ticketId ?? "", via, c.get("user").id));
+    return c.html(<ScanPage eventId={ev.id} title={ev.title} user={c.get("user")} o={o} />);
+  } catch (e) {
+    if (!(e instanceof DomainError)) throw e;
+    return c.html(<ScanPage eventId={ev.id} title={ev.title} user={c.get("user")} err={e.message} />, e.status);
+  }
 });
 
 door.post("/:eventId/scan.json", async (c) => {
@@ -178,11 +332,22 @@ door.post("/:eventId/scan.json", async (c) => {
 
 async function WalkInPage({ eventId, user, ok, err }: { eventId: string; user: User; ok?: string; err?: string }) {
   const s = (await doorSales.summary(eventId))!;
-  const mine = s.byStaff.find((r) => r.staffId === user.id);
+  // The cash drawer holds two things: walk-in sales, and cash taken for tickets confirmed in advance.
+  const collected = (await doorCash(eventId));
+  const staffIds = [...new Set([...s.byStaff.map((r) => r.staffId), ...collected.map((r) => r.staffId)])];
+  const drawer = staffIds
+    .map((id) => {
+      const w = s.byStaff.find((r) => r.staffId === id);
+      const t = collected.find((r) => r.staffId === id);
+      return { staffId: id, name: w?.name ?? t?.name ?? id, walkIns: w?.tickets ?? 0, collected: t?.tickets ?? 0, cents: (w?.cents ?? 0) + (t?.cents ?? 0) };
+    })
+    .sort((a, b) => b.cents - a.cents);
+  const cashCents = drawer.reduce((n, r) => n + r.cents, 0);
+  const mine = drawer.find((r) => r.staffId === user.id);
   const maxQty = Math.max(1, Math.min(20, s.left ?? 20));
   return (
     <Page title={`Walk-ins | ${s.event.title}`} user={user} path="/admin/door">
-      <div style="max-width:560px;margin:0 auto">
+      <div class="door">
         <DoorHeader eventId={eventId} title={s.event.title} mode="walk-in" />
         <Flash ok={ok} err={err} />
 
@@ -232,7 +397,7 @@ async function WalkInPage({ eventId, user, ok, err }: { eventId: string; user: U
 
         <div class="stats" style="margin-top:20px">
           <div class="stat">
-            <b>{money(s.cashCents)}</b>
+            <b>{money(cashCents)}</b>
             <span>cash tonight</span>
           </div>
           <div class="stat">
@@ -245,16 +410,16 @@ async function WalkInPage({ eventId, user, ok, err }: { eventId: string; user: U
           </div>
         </div>
 
-        {s.byStaff.length > 0 && (
+        {drawer.length > 0 && (
           <div class="card flush">
             <h2>Cash by staff</h2>
             <table>
               <tbody>
-                {s.byStaff.map((r) => (
+                {drawer.map((r) => (
                   <tr>
-                    <td>{r.name ?? r.staffId}</td>
+                    <td>{r.name}</td>
                     <td class="small muted">
-                      {r.tickets} walk-in{r.tickets === 1 ? "" : "s"}
+                      {[r.walkIns ? `${r.walkIns} walk-in${r.walkIns === 1 ? "" : "s"}` : "", r.collected ? `${r.collected} ticket${r.collected === 1 ? "" : "s"} paid at door` : ""].filter(Boolean).join(", ")}
                     </td>
                     <td style="text-align:right">
                       <b>{money(r.cents)}</b>

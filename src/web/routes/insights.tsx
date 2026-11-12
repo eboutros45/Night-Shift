@@ -92,6 +92,7 @@ insights.get("/events/:id/stats", async (c) => {
   const s = (await eventStats(data.event.id));
   const sold = s.byWave.reduce((n, w) => n + Number(w.sold ?? 0), 0);
   const revenue = s.byWave.reduce((n, w) => n + Number(w.revenue ?? 0), 0);
+  const owed = s.byWave.reduce((n, w) => n + w.owed, 0);
   const capacity = s.byWave.reduce((n, w) => n + w.capacity, 0);
   const admitted = s.scans.find((r) => r.result === "ADMITTED")?.n ?? 0;
   const walkIns = (await doorSales.summary(data.event.id))!;
@@ -105,12 +106,16 @@ insights.get("/events/:id/stats", async (c) => {
       <div class="stats">
         <div class="stat">
           <b>{money(revenue)}</b>
-          <span>online revenue (Whish)</span>
+          <span>paid (Whish, Neo, cash at door)</span>
+        </div>
+        <div class={`stat ${owed ? "alert" : ""}`}>
+          <b>{money(owed)}</b>
+          <span>still to collect</span>
         </div>
         <a class="stat" href={`/admin/door/${data.event.id}/walk-in`}>
           <b>{money(walkIns.cashCents)}</b>
           <span>
-            door cash, {walkIns.sold} walk-in{walkIns.sold === 1 ? "" : "s"}
+            walk-in cash, {walkIns.sold} walk-in{walkIns.sold === 1 ? "" : "s"}
             {walkIns.voided.sales ? `, ${walkIns.voided.sales} voided` : ""}
           </span>
         </a>
@@ -118,7 +123,7 @@ insights.get("/events/:id/stats", async (c) => {
           <b>
             {sold} / {capacity}
           </b>
-          <span>tickets sold</span>
+          <span>tickets confirmed</span>
         </div>
         <div class="stat">
           <b>{s.comps}</b>
@@ -132,14 +137,15 @@ insights.get("/events/:id/stats", async (c) => {
       <div class="cols even">
         <Bars title="Funnel" rows={s.funnel.map((f) => ({ key: f.step, n: f.n }))} />
         <div class="card flush">
-          <h2>Sales by wave</h2>
+          <h2>Tickets by wave</h2>
           <table>
             <thead>
               <tr>
                 <th>Wave</th>
                 <th>Price</th>
-                <th>Sold</th>
-                <th>Revenue</th>
+                <th>Confirmed</th>
+                <th>Paid</th>
+                <th>Collected</th>
               </tr>
             </thead>
             <tbody>
@@ -149,6 +155,9 @@ insights.get("/events/:id/stats", async (c) => {
                   <td>{money(w.price)}</td>
                   <td>
                     {Number(w.sold ?? 0)} / {w.capacity}
+                  </td>
+                  <td>
+                    {w.paid} / {Number(w.sold ?? 0)}
                   </td>
                   <td>{money(Number(w.revenue ?? 0))}</td>
                 </tr>

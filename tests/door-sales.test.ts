@@ -5,7 +5,7 @@ import { events, tickets, users } from "../src/db/schema.ts";
 import * as door from "../src/services/door-sales.ts";
 import { feed } from "../src/services/journal.ts";
 import { flushMail } from "../src/services/mailer.ts";
-import { reserve } from "../src/services/orders.ts";
+import { confirm as reserve } from "../src/services/orders.ts";
 import { doorCounts } from "../src/services/tickets.ts";
 import { buyer, freshDb, makeEvent, T0 } from "./helpers.ts";
 

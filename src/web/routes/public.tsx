@@ -1,15 +1,15 @@
-// Customer-facing pages. Flow: Event -> Ticket selection (on the event page) -> Your details
-// (checkout) -> Payment (Whish link/QR + proof upload) -> Verification -> Tickets.
-// Tickets are only ever issued by an admin approving the payment; nothing here marks a payment paid.
+// Guest-facing pages. Flow: Event -> pick a ticket -> Your details -> Your ticket.
+// Nobody signs in. Confirming attendance issues the QR ticket at once; the ticket page then
+// offers two ways to pay: send a Whish/Neo screenshot (an admin verifies it), or cash at the door.
+// Nothing here marks a ticket paid. Order links are bearer links: whoever holds one sees the ticket.
 import { Hono, type Context } from "hono";
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { now } from "../../clock.ts";
-import { currentUser } from "../session.ts";
 import { config } from "../../config.ts";
 import type { Event } from "../../db/schema.ts";
 import { checkoutInput, fieldErrors, proofInput } from "../../domain/inputs.ts";
-import { DomainError, orderTier, type OrderStatus } from "../../domain/status.ts";
+import { DomainError, LIVE_ORDER_STATUSES, orderTier, PAY_LABEL } from "../../domain/status.ts";
 import type { WaveView } from "../../domain/waves.ts";
 import * as limits from "../../lib/limits.ts";
 import { ticketsPdf } from "../../lib/pdf.ts";
@@ -20,7 +20,7 @@ import { track, type ViewType } from "../../services/analytics.ts";
 import * as events from "../../services/events.ts";
 import * as orders from "../../services/orders.ts";
 import { clientIp, flash, retryAfter } from "../http.ts";
-import { Countdown, Empty, FieldErr, Flash, Flyer, Page } from "../layout.tsx";
+import { Empty, FieldErr, Flash, Flyer, Page } from "../layout.tsx";
 
 export const pub = new Hono();
 
@@ -211,7 +211,7 @@ pub.get("/e/:slug", async (c) => {
           <form class="tickets" id="tickets" method="get" action={`/e/${event.slug}/checkout`} data-ticket-form>
             <header>
               <h2 style="margin:0">Tickets</h2>
-              {!salesOpen && <span class="muted small">Sales have closed</span>}
+              {!salesOpen && <span class="muted small">No longer available</span>}
               {salesOpen && sale === "SOLD_OUT" && <span class="muted small">Sold out</span>}
             </header>
             {waves.map((w) => {
@@ -230,7 +230,7 @@ pub.get("/e/:slug", async (c) => {
                 </label>
               );
             })}
-            {waves.length === 0 && <p class="muted" style="padding:20px;margin:0">Tickets are not on sale yet.</p>}
+            {waves.length === 0 && <p class="muted" style="padding:20px;margin:0">Tickets are not available yet.</p>}
             {buyable.length > 0 && (
               <footer>
                 <div class="qty">
@@ -251,10 +251,9 @@ pub.get("/e/:slug", async (c) => {
                     {money(first!.priceCents)}
                   </span>
                 </div>
-                <button class="primary lg block">Continue</button>
+                <button class="primary lg block">Get my ticket</button>
                 <p class="tiny muted" style="margin:0">
-                  Up to {event.maxPerOrder} per order, {event.maxPerBuyer} per person. You pay by Whish on the next step; we hold your tickets for{" "}
-                  {config.reservationMinutes} minutes.
+                  No account needed. You get your QR ticket right away, then pay by Whish or Neo, or cash at the door.
                 </p>
               </footer>
             )}
@@ -283,7 +282,7 @@ pub.get("/e/:slug", async (c) => {
           <section class="block">
             <h2>Good to know</h2>
             <p class="muted">{event.refundPolicy}</p>
-            <p class="muted">Your QR ticket is emailed once your payment is verified. One code per person, scanned once at the door.</p>
+            <p class="muted">Your QR ticket is yours as soon as you confirm. Pay by Whish or Neo beforehand, or cash at the door. One code per person, scanned once.</p>
           </section>
         </div>
       </div>
@@ -304,13 +303,13 @@ pub.get("/e/:slug", async (c) => {
 
 // ---------- checkout: your details ----------
 
-function Steps({ at, failed }: { at: number; failed?: string }) {
-  const names = ["Tickets", "Your details", "Payment", "Verification", "Your tickets"];
+function Steps({ at }: { at: number }) {
+  const names = ["Pick a ticket", "Your details", "Your ticket"];
   return (
     <ol class="steps" aria-label="Progress">
       {names.map((n, i) => (
-        <li class={i < at ? "done" : i === at ? (failed ? "fail" : "now") : ""} aria-current={i === at ? "step" : undefined}>
-          {i === at && failed ? failed : n}
+        <li class={i < at ? "done" : i === at ? "now" : ""} aria-current={i === at ? "step" : undefined}>
+          {n}
         </li>
       ))}
     </ol>
@@ -364,34 +363,34 @@ function CheckoutPage(props: {
       <div class="split">
         <div>
           <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem);margin-bottom:10px">
-            Your details
+            Almost there
           </h1>
-          <p class="sub">Your tickets and payment link go to this email. Use your Whish number so we can match the payment.</p>
+          <p class="sub">Tell us who's coming. Your QR ticket shows up on the next screen and in your email.</p>
           <Flash err={props.err} />
           <form method="post" action={`/e/${event.slug}/checkout`} class="fields">
             <input type="hidden" name="waveId" value={props.wave.id} />
             <input type="hidden" name="quantity" value={String(qty)} />
             <label>
               Full name
-              <input name="customerName" value={v.customerName ?? ""} required autocomplete="name" />
+              <input name="customerName" value={v.customerName ?? ""} required autocomplete="name" autofocus enterkeyhint="next" />
               <FieldErr e={props.errors} k="customerName" />
             </label>
             <label>
-              Email
-              <input name="customerEmail" readonly type="email" value={v.customerEmail ?? ""} required autocomplete="email" inputmode="email" />
-              <FieldErr e={props.errors} k="customerEmail" />
+              Phone
+              <input name="customerPhone" type="tel" value={v.customerPhone ?? ""} required autocomplete="tel" inputmode="tel" placeholder="70 123 456" enterkeyhint="next" />
+              <FieldErr e={props.errors} k="customerPhone" />
             </label>
             <label>
-              Phone <span class="hint">(your Whish number)</span>
-              <input name="customerPhone" type="tel" value={v.customerPhone ?? ""} required autocomplete="tel" placeholder="+961 70 123 456" />
-              <FieldErr e={props.errors} k="customerPhone" />
+              Email <span class="hint">(we send your ticket here)</span>
+              <input name="customerEmail" type="email" value={v.customerEmail ?? ""} required autocomplete="email" inputmode="email" placeholder="you@example.com" enterkeyhint="done" />
+              <FieldErr e={props.errors} k="customerEmail" />
             </label>
             <FieldErr e={props.errors} k="waveId" />
             <FieldErr e={props.errors} k="quantity" />
             <div>
-              <button class="primary lg">Reserve and continue to payment</button>
+              <button class="primary lg block" data-busy-label="Getting your ticket…">Confirm attendance</button>
               <p class="tiny muted" style="margin-top:12px">
-                Your tickets are held for {config.reservationMinutes} minutes while you pay. Nothing is charged here.
+                Nothing to pay right now. {props.wave.priceCents > 0 && <>It's {money(props.wave.priceCents)} per ticket, by Whish, Neo or cash at the door.</>}
               </p>
             </div>
           </form>
@@ -402,23 +401,6 @@ function CheckoutPage(props: {
   );
 }
 
-pub.use("/e/:slug/checkout", async (c, next) => {
-  if (!await currentUser(c)) {
-    const destination = c.req.method === "GET" ? c.req.path + new URL(c.req.url).search : `/e/${c.req.param("slug")}`;
-    return c.redirect(`/login?next=${encodeURIComponent(destination)}`, 303);
-  }
-  await next();
-});
-pub.use("/o/:token/*", async (c, next) => {
-  const data = await orders.getByToken(c.req.param("token"));
-  if (data?.order.userId) {
-    const user = await currentUser(c);
-    if (!user) return c.redirect(`/login?next=${encodeURIComponent(c.req.path)}`, 303);
-    if (user.id !== data.order.userId && user.role !== "ADMIN") return c.notFound();
-  }
-  await next();
-});
-
 pub.get("/e/:slug/checkout", async (c) => {
   const slug = c.req.param("slug");
   const data = (await events.getPublic(slug));
@@ -426,7 +408,7 @@ pub.get("/e/:slug/checkout", async (c) => {
   const wave = data.waves.find((w) => w.id === (c.req.query("wave") ?? "") && w.state === "ON_SALE");
   if (!wave || !data.salesOpen) return c.redirect(`/e/${slug}#tickets`, 303);
   (await view(c, "CHECKOUT_START", data.event.id));
-  return c.html(<CheckoutPage data={data} wave={wave} values={{ quantity: c.req.query("quantity") ?? "1", customerEmail: (await currentUser(c))!.email, customerName: (await currentUser(c))!.name }} />);
+  return c.html(<CheckoutPage data={data} wave={wave} values={{ quantity: c.req.query("quantity") ?? "1" }} />);
 });
 
 pub.post("/e/:slug/checkout", async (c) => {
@@ -435,8 +417,6 @@ pub.post("/e/:slug/checkout", async (c) => {
   if (!data) return c.notFound();
   const body = await c.req.parseBody();
   const values = Object.fromEntries(Object.entries(body).filter(([, v]) => typeof v === "string")) as Record<string, string>;
-  const user = (await currentUser(c))!;
-  values.customerEmail = user.email;
   const wave = data.waves.find((w) => w.id === values.waveId);
   if (!wave) return c.redirect(`/e/${slug}#tickets`, 303);
   const parsed = checkoutInput.safeParse(values);
@@ -444,7 +424,7 @@ pub.post("/e/:slug/checkout", async (c) => {
   try {
     (await limits.take("checkoutPerIp", clientIp(c)));
     (await limits.take("checkoutPerEmail", parsed.data.customerEmail));
-    const order = (await orders.reserve(slug, parsed.data, now(), user.id));
+    const order = (await orders.confirm(slug, parsed.data, now()));
     return c.redirect(`/o/${order.accessToken}`, 303);
   } catch (e) {
     if (!(e instanceof DomainError)) throw e;
@@ -453,259 +433,196 @@ pub.post("/e/:slug/checkout", async (c) => {
   }
 });
 
-// ---------- order: payment, verification, done ----------
+// ---------- your ticket: QR codes first, then how to pay ----------
 
-const STEP_OF: Record<OrderStatus, { at: number; failed?: string }> = {
-  AWAITING_PAYMENT: { at: 2 },
-  PENDING_VERIFICATION: { at: 3 },
-  APPROVED: { at: 5 },
-  EXPIRED: { at: 2, failed: "Hold expired" },
-  REJECTED: { at: 3, failed: "Payment not verified" },
-  VOIDED: { at: 5, failed: "Sale voided at the door" },
+type Loaded = NonNullable<Awaited<ReturnType<typeof orders.getByToken>>>;
+
+const Stubs: FC<{ o: Loaded; svgs: string[] }> = ({ o, svgs }) => {
+  const tier = orderTier(o.order, o.wave?.name);
+  return (
+    <div class="stubs">
+      {o.tickets.map((t, i) => (
+        <article class={`stub${t.status === "VALID" ? "" : " void"}`} aria-label={`Ticket ${i + 1} of ${o.tickets.length}`}>
+          {t.status === "CHECKED_IN" && <span class="stamp used">Used</span>}
+          {t.status === "REVOKED" && <span class="stamp revoked">Cancelled</span>}
+          <div class="top">
+            <p class="ttl">{o.event.title}</p>
+            <p class="meta">
+              {fmtDayShort(o.event.startsAt)}, {fmtHourMin(o.event.startsAt)}
+              <br />
+              {o.event.venueName}, {o.event.city}
+            </p>
+            <div class="who">
+              <span>
+                <strong>{t.attendeeName}</strong>
+                {tier}
+              </span>
+              <span class="num">
+                {i + 1}/{o.tickets.length}
+              </span>
+            </div>
+          </div>
+          <div class="bottom">
+            {raw(svgs[i])}
+            {t.status !== "REVOKED" &&
+              (t.paidAt !== null ? (
+                <span class="paytag paid">{t.priceCents === 0 ? "Free entry" : `Paid · ${PAY_LABEL[t.paidVia ?? ""] ?? "verified"}`}</span>
+              ) : (
+                <span class="paytag due">Not paid yet · {money(t.priceCents)}</span>
+              ))}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+};
+
+/** The Whish number is only worth showing once the organiser has set a real one. */
+const whishNumber = () => (config.whish.phone.includes("00 000 000") ? null : config.whish.phone);
+
+const PayChoices: FC<{ o: Loaded }> = ({ o }) => {
+  const due = money(o.dueCents);
+  const to = whishNumber();
+  return (
+    <section class="paychoices" id="pay" aria-labelledby="pay-title">
+      <h2 id="pay-title">How do you want to pay?</h2>
+      {o.order.rejectReason && (
+        <p class="flash err" role="alert">
+          We couldn't verify your last screenshot: {o.order.rejectReason}. Your ticket still works. Send a new one or pay at the door.
+        </p>
+      )}
+      <div class="paygrid">
+        <div class="card">
+          <h3>Pay at the door</h3>
+          <p class="amount">{due}</p>
+          <p class="muted" style="margin:0">Bring cash and show your QR code. Nothing else to do.</p>
+        </div>
+        <form method="post" action={`/o/${o.order.accessToken}/proof`} enctype="multipart/form-data" class="card stack">
+          <h3>Already paid by Whish or Neo?</h3>
+          <p class="muted" style="margin:0">
+            {to ? <>Send {due} to <strong class="num" style="color:var(--bone)">{to}</strong>, then a</> : "A"}ttach a screenshot of the payment and you're done.
+          </p>
+          <div class="seg" role="radiogroup" aria-label="Paid with">
+            <label>
+              <input type="radio" name="method" value="WHISH" checked />
+              <span>Whish</span>
+            </label>
+            <label>
+              <input type="radio" name="method" value="NEO" />
+              <span>Neo</span>
+            </label>
+          </div>
+          <label class="drop">
+            <input type="file" name="proof" accept="image/png,image/jpeg,image/webp,application/pdf" required data-file-label />
+            <strong data-file-name>Add payment screenshot</strong>
+            <span class="small">Photo or PDF, up to 5 MB</span>
+          </label>
+          <button class="primary lg block" data-busy-label="Sending…">Send screenshot</button>
+        </form>
+      </div>
+    </section>
+  );
 };
 
 pub.get("/o/:token", async (c) => {
   const o = (await orders.getByToken(c.req.param("token")));
   if (!o) return c.notFound();
-  const { order, event, wave, status } = o;
-  const whishQr = status === "AWAITING_PAYMENT" ? await qrSvg(config.whish.link) : "";
-  const step = STEP_OF[status];
+  const { order, event, status } = o;
+  const live = LIVE_ORDER_STATUSES.includes(status) && o.tickets.length > 0;
+  const usable = o.tickets.filter((t) => t.status !== "REVOKED");
+  const svgs = live ? await Promise.all(o.tickets.map((t) => qrSvg(t.token))) : [];
+  const n = usable.length;
   return c.html(
-    <Page title={`Order ${order.reference}`}>
-      <Steps at={step.at} failed={step.failed} />
-      <div class="split">
-        <div>
-          <Flash {...flash(c)} />
-          {status === "AWAITING_PAYMENT" && (
-            <section class="stack">
-              <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem)">
-                Pay with Whish
-              </h1>
-              <p class="lede">
-                Your tickets are held for <Countdown ms={(order.expiresAt ?? 0) - now()} />. Pay the exact amount, then upload your proof below.
-              </p>
-              <div class="pay card" style="margin-top:22px">
-                <div class="qr" aria-label="QR code that opens Whish">
-                  {raw(whishQr)}
-                </div>
-                <div class="stack">
-                  <div class="amount">{money(order.totalCents)}</div>
-                  <p style="margin:0">
-                    To <strong>{config.whish.accountName}</strong>
-                    <br />
-                    <span class="num">{config.whish.phone}</span>
-                  </p>
-                  <p class="small" style="margin:0">
-                    Put <code>{order.reference}</code> in the payment note{" "}
-                    <button type="button" class="sm ghost" data-copy={order.reference}>
-                      Copy
-                    </button>
-                  </p>
-                  <div>
-                    <a class="btn solid" href={config.whish.link} target="_blank" rel="noopener">
-                      Open Whish
-                    </a>
-                  </div>
-                </div>
-              </div>
-              <h2 style="margin-top:34px">Upload your proof</h2>
-              <form method="post" action={`/o/${order.accessToken}/proof`} enctype="multipart/form-data" class="fields">
-                <label class="drop">
-                  <input type="file" name="proof" accept="image/png,image/jpeg,image/webp,application/pdf" data-file-label />
-                  <strong data-file-name>Choose a screenshot or PDF</strong>
-                  <span class="small">PNG, JPG, WEBP or PDF, up to 5 MB</span>
-                </label>
-                <label>
-                  Whish transaction reference <span class="hint">(optional if you upload a file)</span>
-                  <input name="txnRef" maxlength={80} autocomplete="off" />
-                </label>
-                <div>
-                  <button class="primary lg">Submit payment proof</button>
-                </div>
-              </form>
-            </section>
-          )}
-          {status === "PENDING_VERIFICATION" && (
-            <section>
-              <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem)">
-                Checking your payment
-              </h1>
-              <p class="lede" style="margin-top:16px">
-                We have your proof. Once someone on our team matches it to the Whish payment, your tickets are emailed to you and appear here.
-              </p>
-              <p class="muted">Submitted {fmtDate(order.submittedAt)}. Your tickets stay reserved while we check.</p>
-            </section>
-          )}
-          {status === "APPROVED" && (
-            <section>
+    <Page title={live ? `Your ticket${n === 1 ? "" : "s"} | ${event.title}` : `Order ${order.reference}`}>
+      <Flash {...flash(c)} />
+      {live ? (
+        <>
+          <div class="head">
+            <div>
               <h1 class="display" style="font-size:clamp(2.6rem,7vw,5rem)">
                 You're in
               </h1>
-              <p class="lede" style="margin-top:16px">
-                {order.quantity} ticket{order.quantity === 1 ? "" : "s"} for {event.title}. Show the QR code at the door.
+              <p class="sub">
+                {n === 1 ? "This is your ticket" : `These are your ${n} tickets`} for {event.title}. Show {n === 1 ? "the code" : "one code per person"} at the door. We also emailed{" "}
+                {n === 1 ? "it" : "them"} to {order.customerEmail}.
               </p>
-              <div class="row" style="margin-top:24px">
-                <a class="btn primary lg" href={`/o/${order.accessToken}/tickets`}>
-                  Show my tickets
-                </a>
-                <a class="btn lg" href={`/o/${order.accessToken}/tickets.pdf`}>
-                  Download PDF
-                </a>
-              </div>
-            </section>
-          )}
-          {status === "REJECTED" && (
-            <section>
-              <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem)">
-                Payment not verified
-              </h1>
-              <p class="lede" style="margin-top:16px">
-                {order.rejectReason}
-              </p>
-              <p class="muted">If you paid and think this is a mistake, reply to the email we sent with your Whish receipt.</p>
-              <a class="btn primary" href={`/e/${event.slug}#tickets`}>
-                Start a new order
-              </a>
-            </section>
-          )}
-          {status === "EXPIRED" && (
-            <section>
-              <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem)">
-                Your hold expired
-              </h1>
-              <p class="lede" style="margin-top:16px">
-                No payment proof arrived within {config.reservationMinutes} minutes, so these tickets went back on sale.
-              </p>
-              <a class="btn primary" href={`/e/${event.slug}#tickets`}>
-                Start a new order
-              </a>
-            </section>
-          )}
-          <details class="card" style="margin-top:40px">
-            <summary>
-              <strong>Order history</strong> <span class="muted small">reference {order.reference}</span>
-            </summary>
-            <div style="margin-top:14px">
-              <Timeline rows={o.timeline.filter((r) => r.action === "ORDER_CREATED" || r.action === "PROOF_SUBMITTED" || r.toStatus)} />
             </div>
-          </details>
-        </div>
-        <Summary event={event} waveName={orderTier(order, wave?.name)} qty={order.quantity} unit={order.unitPriceCents} total={order.totalCents} />
-      </div>
+            <a class="btn" href={`/o/${order.accessToken}/tickets.pdf`}>
+              Save as PDF
+            </a>
+          </div>
+          {status === "PENDING_VERIFICATION" && o.dueCents > 0 && (
+            <p class="flash ok" role="status">
+              Got your {PAY_LABEL[order.payMethod ?? "WHISH"]} screenshot. We're checking it now; your ticket already works. If it isn't verified by the time you arrive, you can pay at the door.
+            </p>
+          )}
+          {o.dueCents === 0 && n > 0 && usable.some((t) => t.priceCents > 0) && (
+            <p class="flash ok" role="status">
+              All paid. You're all set, see you there.
+            </p>
+          )}
+          {o.dueCents === 0 && n > 0 && usable.every((t) => t.priceCents === 0) && (
+            <p class="flash ok" role="status">
+              Free entry. You're all set, see you there.
+            </p>
+          )}
+          <Stubs o={o} svgs={svgs} />
+          {status === "CONFIRMED" && o.dueCents > 0 && <PayChoices o={o} />}
+          <p class="muted small" style="margin-top:28px">
+            Order <span class="mono">{order.reference}</span> · Keep this page's link private: anyone who has it can use {n === 1 ? "this ticket" : "these tickets"}.
+          </p>
+        </>
+      ) : (
+        <section style="max-width:560px">
+          <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem)">
+            {status === "CANCELLED" || status === "VOIDED" ? "Ticket cancelled" : "This order is closed"}
+          </h1>
+          <p class="lede" style="margin-top:16px">
+            {status === "CANCELLED"
+              ? `This order for ${event.title} was cancelled${order.rejectReason ? `: ${order.rejectReason}` : "."}`
+              : status === "VOIDED"
+                ? "This sale was cancelled at the door."
+                : `This order for ${event.title} was never completed, so it has no tickets.`}
+          </p>
+          <a class="btn primary lg" href={`/e/${event.slug}#tickets`}>
+            Get a new ticket
+          </a>
+        </section>
+      )}
     </Page>,
   );
 });
 
-// Customer timeline: plain words, no staff identities.
-const LABELS: Record<string, string> = {
-  ORDER_CREATED: "Tickets reserved",
-  PROOF_SUBMITTED: "Payment proof submitted",
-  ORDER_APPROVED: "Payment verified, tickets issued",
-  ORDER_REJECTED: "Payment not verified",
-  ORDER_EXPIRED: "Hold expired",
-  COMP_CREATED: "Guest list tickets issued",
-  TICKET_REVOKED: "A ticket was cancelled",
-};
-const Timeline: FC<{ rows: { at: number; action: string }[] }> = ({ rows }) => (
-  <ul class="timetable">
-    {rows
-      .filter((r) => LABELS[r.action])
-      .map((r) => (
-        <li>
-          <span class="time small">{fmtHourMin(r.at)}</span>
-          <span>{LABELS[r.action]}</span>
-          <span class="role">{fmtDayShort(r.at)}</span>
-        </li>
-      ))}
-  </ul>
-);
-
 pub.post("/o/:token/proof", async (c) => {
   const token = c.req.param("token");
+  const fail = (message: string) => c.redirect(`/o/${token}?err=${encodeURIComponent(message)}#pay`, 303);
   try {
     // Limits are checked before the body is read, so a blocked client can't make us parse uploads.
     (await limits.take("proofPerIp", clientIp(c)));
     (await limits.take("proofPerOrder", token));
   } catch (e) {
     retryAfter(c, e);
-    return c.redirect(`/o/${token}?err=${encodeURIComponent((e as Error).message)}`, 303);
+    return fail((e as Error).message);
   }
   const body = await c.req.parseBody();
   const file = body.proof instanceof File && body.proof.size > 0 ? body.proof : null;
-  const { txnRef } = proofInput.parse({ txnRef: typeof body.txnRef === "string" ? body.txnRef : undefined });
+  const parsed = proofInput.safeParse({ method: body.method });
+  if (!parsed.success) return fail("Choose Whish or Neo.");
   try {
-    await orders.submitProof(token, file, txnRef);
+    await orders.submitProof(token, file, parsed.data.method);
     return c.redirect(`/o/${token}`, 303);
   } catch (e) {
     if (!(e instanceof DomainError)) throw e;
-    return c.redirect(`/o/${token}?err=${encodeURIComponent(e.message)}`, 303);
+    return fail(e.message);
   }
 });
 
-// ---------- tickets ----------
-
-pub.get("/o/:token/tickets", async (c) => {
-  const o = (await orders.getByToken(c.req.param("token")));
-  if (!o || o.status !== "APPROVED") return c.notFound();
-  const svgs = await Promise.all(o.tickets.map((t) => qrSvg(t.token)));
-  const tier = orderTier(o.order, o.wave?.name);
-  return c.html(
-    <Page title={`Tickets | ${o.event.title}`}>
-      <Steps at={5} />
-      <div class="head">
-        <div>
-          <h1 class="display" style="font-size:clamp(2.4rem,6vw,4rem)">
-            Your tickets
-          </h1>
-          <p class="sub">
-            Show one code per person at the door. Screen brightness up helps. Order <span class="mono">{o.order.reference}</span>
-          </p>
-        </div>
-        <div class="row">
-          <a class="btn" href={`/o/${o.order.accessToken}`}>
-            Order details
-          </a>
-          <a class="btn solid" href={`/o/${o.order.accessToken}/tickets.pdf`}>
-            Download PDF
-          </a>
-        </div>
-      </div>
-      <div class="stubs">
-        {o.tickets.map((t, i) => (
-          <article class={`stub${t.status === "VALID" ? "" : " void"}`} aria-label={`Ticket ${i + 1} of ${o.tickets.length}`}>
-            {t.status === "CHECKED_IN" && <span class="stamp used">Used</span>}
-            {t.status === "REVOKED" && <span class="stamp revoked">Cancelled</span>}
-            <div class="top">
-              <p class="ttl">{o.event.title}</p>
-              <p class="meta">
-                {fmtDayShort(o.event.startsAt)}, {fmtHourMin(o.event.startsAt)}
-                <br />
-                {o.event.venueName}, {o.event.city}
-              </p>
-              <div class="who">
-                <span>
-                  <strong>{t.attendeeName}</strong>
-                  {tier}
-                </span>
-                <span class="num">
-                  {i + 1}/{o.tickets.length}
-                </span>
-              </div>
-            </div>
-            <div class="bottom">
-              {raw(svgs[i])}
-              <span class="code">{t.token}</span>
-            </div>
-          </article>
-        ))}
-      </div>
-    </Page>,
-  );
-});
+// Old emails link here; the tickets now live on the order page itself.
+pub.get("/o/:token/tickets", (c) => c.redirect(`/o/${c.req.param("token")}`, 303));
 
 pub.get("/o/:token/tickets.pdf", async (c) => {
   const o = (await orders.getByToken(c.req.param("token")));
-  if (!o || o.status !== "APPROVED") return c.notFound();
+  if (!o || !LIVE_ORDER_STATUSES.includes(o.status) || !o.tickets.length) return c.notFound();
   const pdf = await ticketsPdf(o.order, o.event, o.tickets, o.wave?.name);
   return c.body(new Uint8Array(pdf), 200, {
     "content-type": "application/pdf",

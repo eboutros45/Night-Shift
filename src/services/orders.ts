@@ -444,6 +444,11 @@ export async function list(f: OrderFilter = {}) {
     .map((r) => ({ ...r, ticketCount: Number(r.ticketCount), paidCount: Number(r.paidCount), status: effectiveOrderStatus(r.order, at) }));
 }
 
+/** Working tickets nobody has paid for yet, across all events. */
+export async function unpaidTickets() {
+  return (await db().select({ n: count() }).from(tickets).where(UNPAID).limit(1))[0]!.n;
+}
+
 export async function countByStatus(statuses: OrderStatus[]) {
   return (await db().select({ n: count() }).from(orders).where(inArray(orders.status, statuses)).limit(1))[0]!.n;
 }
