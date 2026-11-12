@@ -60,6 +60,7 @@ export async function sell(eventId: string, input: DoorSaleInput, actor: string,
         customerEmail: "",
         customerPhone: "",
         expiresAt: null,
+        payMethod: null,
         proofKey: null,
         proofMime: null,
         txnRef: null,
@@ -85,7 +86,7 @@ export async function sell(eventId: string, input: DoorSaleInput, actor: string,
       for (let i = 0; i < order.quantity; i++) {
         const id = newId();
         (await t.insert(tickets)
-                  .values({ id, token: secretToken(), orderId: order.id, eventId, attendeeName: order.customerName, status: "CHECKED_IN", checkedInAt: at, checkedInBy: actor, createdAt: at }).returning());
+                  .values({ id, token: secretToken(), orderId: order.id, eventId, attendeeName: order.customerName, status: "CHECKED_IN", checkedInAt: at, checkedInBy: actor, priceCents: order.unitPriceCents, paidAt: at, paidVia: "CASH", paidBy: actor, createdAt: at }).returning());
         (await record(t, { actor, entityType: "ticket", entityId: id, eventId, action: "TICKET_ISSUED", to: "CHECKED_IN", at, data: { door: true } }));
       }
       return order;

@@ -79,3 +79,6 @@ export const buyer = (waveId: string, quantity = 1, who?: { email?: string; phon
     customerPhone: who?.phone ?? `+961 70 ${String(100000 + n).slice(-6)}`,
   };
 };
+
+/** A tiny valid PNG header: enough for the upload sniffer. */
+export const screenshot = () => new File([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0])], "paid.png", { type: "image/png" });

@@ -86,6 +86,7 @@ export const orders = pgTable(
     customerEmail: text("customer_email").notNull(),
     customerPhone: text("customer_phone").notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }), // only meaningful while AWAITING_PAYMENT
+    payMethod: text("pay_method"), // WHISH | NEO, set when a payment screenshot is submitted
     proofKey: text("proof_key"), // file name in storage/proofs (never public)
     proofMime: text("proof_mime"),
     txnRef: text("txn_ref"),
@@ -116,6 +117,10 @@ export const tickets = pgTable(
       .references(() => events.id, { onDelete: "cascade" }),
     attendeeName: text("attendee_name").notNull(),
     status: text("status").notNull().default("VALID"), // VALID | CHECKED_IN | REVOKED
+    priceCents: integer("price_cents").notNull().default(0), // what this ticket costs
+    paidAt: bigint("paid_at", { mode: "number" }), // null = not paid yet
+    paidVia: text("paid_via"), // see PAID_VIA
+    paidBy: text("paid_by"), // staff user who verified the transfer or took the cash
     checkedInAt: bigint("checked_in_at", { mode: "number" }),
     checkedInBy: text("checked_in_by"),
     revokedAt: bigint("revoked_at", { mode: "number" }),

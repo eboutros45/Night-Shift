@@ -1,10 +1,11 @@
-// Wave stock is derived from orders, never stored. A wave "holds" every ticket in an order
-// that is pending verification or approved, plus unpaid orders whose hold has not run out.
-// So an expired hold frees its tickets the instant it expires: no counter, no release step.
+// Wave stock is derived from orders, never stored. A wave "holds" every ticket in a live order
+// (confirmed, screenshot under review, or verified), paid or not. Cancelling an order frees its
+// spots at once: no counter, no release step. (Old AWAITING_PAYMENT holds still count until they expire.)
 import { and, asc, eq, gt, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { now } from "../clock.ts";
 import { tx, type Exec } from "../db/client.ts";
 import { orders, waves } from "../db/schema.ts";
+import { LIVE_ORDER_STATUSES } from "../domain/status.ts";
 import { computeWaveStates } from "../domain/waves.ts";
 import { record } from "./journal.ts";
 
@@ -17,7 +18,7 @@ export async function heldByWave(x: Exec, eventId: string, at: number) {
           eq(orders.eventId, eventId),
           isNotNull(orders.waveId),
           or(
-            inArray(orders.status, ["PENDING_VERIFICATION", "APPROVED"]),
+            inArray(orders.status, LIVE_ORDER_STATUSES),
             and(eq(orders.status, "AWAITING_PAYMENT"), gt(orders.expiresAt, at)),
           ),
         ),
@@ -32,7 +33,7 @@ export async function waveViewsForEvents(x: Exec, eventIds: string[], at = now()
   const [heldRows, allWaves] = await Promise.all([
     x.select({ waveId: orders.waveId, held: sql<number>`sum(${orders.quantity})` }).from(orders)
       .where(and(inArray(orders.eventId, eventIds), isNotNull(orders.waveId), or(
-        inArray(orders.status, ["PENDING_VERIFICATION", "APPROVED"]),
+        inArray(orders.status, LIVE_ORDER_STATUSES),
         and(eq(orders.status, "AWAITING_PAYMENT"), gt(orders.expiresAt, at)))))
       .groupBy(orders.waveId),
     x.select().from(waves).where(inArray(waves.eventId, eventIds)).orderBy(asc(waves.position)),

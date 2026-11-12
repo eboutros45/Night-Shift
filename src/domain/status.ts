@@ -3,7 +3,9 @@
 export const ROLES = ["ADMIN", "SCANNER", "CUSTOMER"] as const;
 export type Role = (typeof ROLES)[number];
 
-export const ORDER_STATUSES = ["AWAITING_PAYMENT", "PENDING_VERIFICATION", "APPROVED", "REJECTED", "EXPIRED", "VOIDED"] as const;
+// CONFIRMED: attendance confirmed, tickets issued, nothing under review. AWAITING_PAYMENT,
+// REJECTED and EXPIRED only exist on orders from before tickets were issued up front.
+export const ORDER_STATUSES = ["CONFIRMED", "PENDING_VERIFICATION", "APPROVED", "CANCELLED", "VOIDED", "AWAITING_PAYMENT", "REJECTED", "EXPIRED"] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export const TICKET_STATUSES = ["VALID", "CHECKED_IN", "REVOKED"] as const;
@@ -12,13 +14,27 @@ export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export const WAVE_MODES = ["MANUAL", "AUTO", "SCHEDULED"] as const;
 export type WaveMode = (typeof WAVE_MODES)[number];
 
-export const SCAN_RESULTS = ["ADMITTED", "ALREADY_USED", "REVOKED", "WRONG_EVENT", "INVALID"] as const;
+/** Orders that hold tier stock and count toward the per-person cap. */
+export const LIVE_ORDER_STATUSES = ["CONFIRMED", "PENDING_VERIFICATION", "APPROVED"];
+
+/** How a guest can pay online: a transfer they prove with a screenshot. */
+export const PAY_METHODS = ["WHISH", "NEO"] as const;
+export type PayMethod = (typeof PAY_METHODS)[number];
+export const PAY_LABEL: Record<string, string> = { WHISH: "Whish", NEO: "Neo", CASH: "Cash at door", COMP: "Free", RECEIPT_SEEN: "Receipt seen at door" };
+
+/** How a ticket got paid. RECEIPT_SEEN: door staff saw the transfer receipt; an admin still verifies it. */
+export const PAID_VIA = ["WHISH", "NEO", "CASH", "COMP", "RECEIPT_SEEN"] as const;
+export type PaidVia = (typeof PAID_VIA)[number];
+
+export const SCAN_RESULTS = ["ADMITTED", "PAYMENT_DUE", "ALREADY_USED", "REVOKED", "WRONG_EVENT", "INVALID"] as const;
 export type ScanResult = (typeof SCAN_RESULTS)[number];
 
 const ORDER_FLOW: Record<OrderStatus, readonly OrderStatus[]> = {
-  AWAITING_PAYMENT: ["PENDING_VERIFICATION", "EXPIRED"],
-  PENDING_VERIFICATION: ["APPROVED", "REJECTED"],
+  CONFIRMED: ["PENDING_VERIFICATION", "CANCELLED"],
+  PENDING_VERIFICATION: ["APPROVED", "CONFIRMED", "CANCELLED"], // a rejected screenshot goes back to CONFIRMED
   APPROVED: ["VOIDED"], // only door (cash) sales can be voided; see services/door-sales.ts
+  CANCELLED: [],
+  AWAITING_PAYMENT: ["EXPIRED"],
   REJECTED: [],
   EXPIRED: [],
   VOIDED: [],

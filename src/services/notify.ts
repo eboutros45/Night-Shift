@@ -7,40 +7,60 @@ import { queue } from "./mailer.ts";
 
 const about = (o: Order) => ({ entityType: "order" as const, entityId: o.id, eventId: o.eventId, to: o.customerEmail });
 
-export async function orderPlaced(x: Exec, order: Order, event: Event) {
+/** Sent the moment attendance is confirmed (and for guest-list tickets): the tickets themselves. */
+export async function ticketsIssued(x: Exec, order: Order, event: Event) {
+  const toPay = order.totalCents > 0 && order.status !== "APPROVED";
   (await queue(x, {
         ...about(order),
-        template: "order_placed",
-        subject: `${event.title}: complete your payment (${order.reference})`,
+        template: "tickets_issued",
+        subject: `Your ticket${order.quantity === 1 ? "" : "s"} for ${event.title} (${order.reference})`,
         text: [
           `Hi ${order.customerName},`,
           ``,
-          `Your ${order.quantity} ticket(s) for ${event.title} are held until ${fmtDate(order.expiresAt)}.`,
-          `Pay ${money(order.totalCents)} with Whish and upload the proof here:`,
+          `You're on the list. Your ${order.quantity} ticket(s) for ${event.title} are attached as a PDF.`,
+          `${fmtDate(event.startsAt)} · ${event.venueName}, ${event.city}`,
+          ``,
+          `Show the QR code at the door. You can also open your tickets here:`,
           appUrl(`/o/${order.accessToken}`),
           ``,
-          `Reference: ${order.reference}`,
+          ...(toPay
+            ? [`To pay: ${money(order.unitPriceCents)} per ticket. Pay by Whish or Neo and send the screenshot from the link above, or just pay cash at the door.`, ``]
+            : []),
+          event.agePolicy,
+        ].join("\n"),
+        attachTicketsFor: order.id,
+      }));
+}
+
+export async function paymentVerified(x: Exec, order: Order, event: Event) {
+  (await queue(x, {
+        ...about(order),
+        template: "payment_verified",
+        subject: `${event.title}: payment received (${order.reference})`,
+        text: [
+          `Hi ${order.customerName},`,
+          ``,
+          `We've verified your payment for ${event.title}. Your tickets are paid; just show the QR code at the door.`,
+          appUrl(`/o/${order.accessToken}`),
         ].join("\n"),
       }));
 }
 
-export async function ticketsIssued(x: Exec, order: Order, event: Event) {
+/** "Find my tickets": the links to every live order for one email address. */
+export async function ticketLinks(x: Exec, email: string, found: { order: Order; event: Event }[]) {
   (await queue(x, {
-        ...about(order),
-        template: "tickets_issued",
-        subject: `Your tickets for ${event.title} (${order.reference})`,
+        entityType: "order",
+        entityId: found[0]!.order.id,
+        eventId: found[0]!.order.eventId,
+        to: email,
+        template: "ticket_links",
+        subject: "Your Night Shift tickets",
         text: [
-          `Hi ${order.customerName},`,
+          `Here are your tickets:`,
           ``,
-          `You're in. Your ${order.quantity} ticket(s) for ${event.title} are attached as a PDF.`,
-          `${fmtDate(event.startsAt)} · ${event.venueName}, ${event.city}`,
-          ``,
-          `Show the QR code at the door. You can also open them here:`,
-          appUrl(`/o/${order.accessToken}/tickets`),
-          ``,
-          event.agePolicy,
+          ...found.flatMap(({ order, event }) => [`${event.title}, ${fmtDate(event.startsAt)} (${order.quantity} ticket${order.quantity === 1 ? "" : "s"})`, appUrl(`/o/${order.accessToken}`), ``]),
+          `Anyone with these links can open the tickets, so keep them to yourself.`,
         ].join("\n"),
-        attachTicketsFor: order.id,
       }));
 }
 
@@ -52,10 +72,11 @@ export async function orderRejected(x: Exec, order: Order, event: Event, reason:
         text: [
           `Hi ${order.customerName},`,
           ``,
-          `We couldn't verify the payment for order ${order.reference}.`,
+          `We couldn't verify the payment screenshot for order ${order.reference}.`,
           `Reason: ${reason}`,
           ``,
-          `Order: ${appUrl(`/o/${order.accessToken}`)}`,
+          `Your ticket is still valid. Send a new screenshot here, or pay cash at the door:`,
+          appUrl(`/o/${order.accessToken}`),
           `Reply to this email if you think this is a mistake.`,
         ].join("\n"),
       }));

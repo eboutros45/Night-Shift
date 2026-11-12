@@ -1,6 +1,7 @@
 // Input validation for everything users and admins submit. Routes parse form bodies with
 // these; services receive already-clean values.
 import { z } from "zod";
+import { PAY_METHODS } from "./status.ts";
 import { localInputToEpoch } from "../lib/time.ts";
 
 const trimmed = (max: number) => z.string().trim().max(max);
@@ -30,7 +31,7 @@ export const checkoutInput = z.object({
 });
 export type CheckoutInput = z.infer<typeof checkoutInput>;
 
-export const proofInput = z.object({ txnRef: trimmed(80).optional().transform((v) => v || undefined) });
+export const proofInput = z.object({ method: z.enum(PAY_METHODS, "Choose Whish or Neo.") });
 
 /** Lineup textarea: one act per line, "22:00 | Name | role" (time and role optional). */
 export type LineupItem = { name: string; role?: string; time?: string };
