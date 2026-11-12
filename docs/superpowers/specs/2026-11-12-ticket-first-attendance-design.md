@@ -15,9 +15,9 @@ Success means a guest reaches a ticket in three taps with no sign-in, and no one
 - Neo is offered next to Whish as an online payment method.
 - No-shows are acceptable. Unpaid tickets keep their spot; the organiser has the name and phone number. There is no automatic release.
 
-## Assumption to confirm
+## Paying online
 
-"Neo" is read as the Neo banking app, handled exactly like Whish: the guest transfers to a displayed account, uploads proof, and an admin verifies. No payment API is called.
+Paying by Whish or Neo is one step: pick the method and attach a screenshot of the successful payment. The page shows the amount and nothing else that needs reading: no payment QR, no reference to copy into a note, no transaction-reference field, and no Neo account details. Admins match the screenshot to the guest by name and phone number. The existing Whish number stays as a single "send to" line when it is configured.
 
 ## Guest flow
 
@@ -25,7 +25,7 @@ Success means a guest reaches a ticket in three taps with no sign-in, and no one
 2. Details screen: name, phone, email, then **Confirm attendance**. No code and no hold timer.
 3. Ticket page (`/o/:token`), shown immediately:
    - QR code per person, each with a **Not paid yet** or **Paid** badge.
-   - **Pay now**: a Whish / Neo switch. Each shows amount, account, the order reference to put in the note, and a proof upload.
+   - **I paid online**: choose Whish or Neo and attach the payment screenshot. One upload, one button.
    - **Pay at the door**: no action; shows the cash amount to bring.
 4. The ticket link is emailed on confirmation, with the QR codes attached as today.
 
@@ -51,7 +51,7 @@ New order column: `pay_method` (`WHISH` or `NEO`), set when proof is submitted.
 Order statuses for new online orders:
 
 - `CONFIRMED`: tickets issued, no proof under review. Replaces `AWAITING_PAYMENT`.
-- `PENDING_VERIFICATION`: Whish or Neo proof submitted, awaiting an admin.
+- `PENDING_VERIFICATION`: Whish or Neo screenshot submitted, awaiting an admin.
 - `APPROVED`: proof verified; every unpaid ticket in the order is marked paid.
 - `CANCELLED`: an admin cancelled the order; its tickets are revoked and the spots are freed.
 
@@ -85,7 +85,7 @@ Every scan and every collection is written to the journal.
 
 ## Configuration
 
-New optional settings mirroring Whish: `NEO_PAYMENT_LINK`, `NEO_ACCOUNT_NAME`, `NEO_ACCOUNT`. When `NEO_ACCOUNT` is empty the Neo option is hidden. `RESERVATION_MINUTES` becomes unused.
+No new settings. `RESERVATION_MINUTES` and `WHISH_PAYMENT_LINK` become unused.
 
 ## Migration
 
