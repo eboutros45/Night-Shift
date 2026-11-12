@@ -29,7 +29,7 @@ export async function buildTicketsEmail(target: Db, orderId: string) {
   const tier = orderTier(order, waveName);
   const when = `${fmtDayLong(event.startsAt)}, doors ${fmtHourMin(event.startsAt)}`;
   const where = [event.venueName, event.venueAddress, event.city].filter(Boolean).join(", ");
-  const link = appUrl(`/o/${order.accessToken}/tickets`);
+  const link = appUrl(`/o/${order.accessToken}`);
 
   const qrs = await Promise.all(list.map((t) => qrPng(t.token)));
   const pdf = await ticketsPdf(order, event, list, waveName);
@@ -59,6 +59,7 @@ export async function buildTicketsEmail(target: Db, orderId: string) {
 </td></tr>`;
   };
 
+  const due = list.filter((t) => t.paidAt === null && t.status !== "REVOKED").reduce((n, t) => n + t.priceCents, 0);
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light">
 <title>Your tickets for ${esc(event.title)}</title></head>
@@ -69,11 +70,11 @@ export async function buildTicketsEmail(target: Db, orderId: string) {
     <tr><td style="padding:0 0 26px;font-family:${DISPLAY};font-weight:800;font-size:22px;letter-spacing:-0.3px;color:${C.bone}">NIGHT<span style="color:${C.sodium}">/</span>SHIFT</td></tr>
     <tr><td style="font-family:${DISPLAY};font-weight:800;font-size:44px;line-height:42px;text-transform:uppercase;color:${C.bone};padding:0 0 12px">You're in</td></tr>
     <tr><td style="font-family:${FONT};font-size:16px;line-height:24px;color:${C.bone};padding:0 0 26px">
-      Hi ${esc(order.customerName.split(" ")[0] ?? order.customerName)}, your payment is verified. Here ${list.length === 1 ? "is your ticket" : `are your ${list.length} tickets`} for <strong>${esc(event.title)}</strong>. Show one code per person at the door; turning your screen brightness up helps.
+      Hi ${esc(order.customerName.split(" ")[0] ?? order.customerName)}, here ${list.length === 1 ? "is your ticket" : `are your ${list.length} tickets`} for <strong>${esc(event.title)}</strong>. Show one code per person at the door; turning your screen brightness up helps.${due > 0 ? `<br><br><strong>Still to pay: ${esc(money(due))}.</strong> Pay by Whish or Neo and send the screenshot from the button below, or just bring cash to the door.` : ""}
     </td></tr>
     ${list.map(stub).join("")}
     <tr><td align="center" style="padding:6px 0 28px">
-      <a href="${esc(link)}" style="display:inline-block;background:${C.sodium};color:#1a1000;font-family:${FONT};font-weight:700;font-size:16px;text-decoration:none;padding:14px 26px;border-radius:999px">Open tickets online</a>
+      <a href="${esc(link)}" style="display:inline-block;background:${C.sodium};color:#1a1000;font-family:${FONT};font-weight:700;font-size:16px;text-decoration:none;padding:14px 26px;border-radius:999px">${due > 0 ? "Open ticket and pay" : "Open tickets online"}</a>
     </td></tr>
     <tr><td style="font-family:${FONT};font-size:13px;line-height:20px;color:${C.fog};border-top:1px solid #2a2a2a;padding-top:18px">
       The same tickets are attached as a PDF (one page per ticket) if you'd rather print or save them.<br>

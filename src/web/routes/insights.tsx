@@ -15,7 +15,7 @@ import { db } from "../../db/client.ts";
 import { journal } from "../../db/schema.ts";
 import { desc, like } from "drizzle-orm";
 import { back, flash, form } from "../http.ts";
-import { Empty, Flash, Page, Status } from "../layout.tsx";
+import { Empty, Flash, Page, Status, statusLabel } from "../layout.tsx";
 import type { Env } from "../session.ts";
 
 export const insights = new Hono<Env>();
@@ -191,7 +191,7 @@ insights.get("/events/:id/stats", async (c) => {
           </table>
           {s.byStatus.length === 0 && <Empty>No orders yet.</Empty>}
         </div>
-        <Bars title="Door scans by result" rows={s.scans.map((r) => ({ key: r.result, n: r.n }))} />
+        <Bars title="Door scans by result" rows={s.scans.map((r) => ({ key: statusLabel(r.result), n: r.n }))} />
         <Bars title="Arrivals per 15 min (Beirut)" rows={s.arrivals.map((a) => ({ key: fmtClock(a.slot).slice(0, 5), n: a.n }))} />
       </div>
     </Page>,
@@ -219,7 +219,7 @@ insights.get("/trace", async (c) => {
         <div class="card spread">
           <div>
             <h3 style="margin:0">Dev clock {off ? <span class="devclock mono">+{fmtDuration(off)}</span> : <span class="pill">real time</span>}</h3>
-            <span class="small muted">Jump the app's "now" forward to watch holds expire and auto waves open/close. Resets on restart.</span>
+            <span class="small muted">Jump the app's "now" forward to watch scheduled and auto waves open/close. Resets on restart.</span>
           </div>
           <form method="post" action="/admin/dev/clock" class="row">
             {(

@@ -10,7 +10,6 @@ export const config = {
   appUrl: (env.APP_URL ?? "http://localhost:3000").replace(/\/$/, ""),
   databasePath: env.DATABASE_PATH ?? "data/nightshift.db",
   sessionSecret: env.SESSION_SECRET ?? "dev-only-change-me-dev-only-change-me",
-  reservationMinutes: Number(env.RESERVATION_MINUTES ?? 30) || 30,
   devTools: env.DEV_TOOLS === "1" || env.NODE_ENV !== "production",
   isProd: env.NODE_ENV === "production",
   // Only trust X-Forwarded-For when a reverse proxy we control sets it; otherwise clients can fake their IP.
@@ -19,11 +18,8 @@ export const config = {
   supabase: { url: env.SUPABASE_URL ?? "", secretKey: env.SUPABASE_SECRET_KEY ?? "" },
   uploadLimitBytes: 5 * 1024 * 1024,
   brand: { name: "Night Shift", orderPrefix: "NS", currency: "USD", supportEmail: env.SUPPORT_EMAIL || fromAddress || smtpUserAddress || "tickets@nightshift.local" },
-  whish: {
-    link: env.WHISH_PAYMENT_LINK ?? "https://example.com/whish-placeholder",
-    accountName: env.WHISH_ACCOUNT_NAME ?? "Night Shift Events",
-    phone: env.WHISH_PHONE ?? "+961 00 000 000",
-  },
+  // Shown to guests as "send $X to <number>" on the ticket page; left out while it is the placeholder.
+  whish: { phone: env.WHISH_PHONE ?? "+961 00 000 000" },
   email: {
     // console = print only (default, safe for dev) | smtp = really send (Resend, Mailpit, Gmail...)
     provider: (env.EMAIL_PROVIDER === "resend" ? "resend" : env.EMAIL_PROVIDER === "smtp" ? "smtp" : "console") as "resend" | "smtp" | "console",

@@ -66,3 +66,39 @@ it("creates drafts through the New event form and preserves validation errors", 
   const scanner = { ...user, role: "SCANNER" };
   expect((await withAccessUser(scanner, () => app.request("http://localhost:3000/admin/events/new"))).status).toBe(403);
 });
+
+it("admin sees who paid how, checks screenshots by name and phone, and can cancel a no-show", async () => {
+  const event = await makeEvent([{ capacity: 10 }]);
+  const who = buyer(event.waveIds[0]!, 3);
+  const order = await orders.confirm(event.slug, who, T0);
+  const first = (await orders.getById(order.id))!.tickets[0]!;
+  const { collectAndAdmit } = await import("../src/services/tickets.ts");
+  await collectAndAdmit(event.eventId, first.id, "CASH", "admin-1", T0 + 1);
+  await orders.submitProof(order.accessToken, screenshot(), "NEO", T0 + 2);
+  const user = (await db().select().from(users).limit(1))[0]!;
+  const app = createApp();
+  const get = async (path: string) => (await withAccessUser(user, () => app.request(`http://localhost:3000${path}`))).text();
+  const post = (path: string, body: Record<string, string>) => withAccessUser(user, () => app.request(`http://localhost:3000${path}`, { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) }));
+
+  const queue = await get("/admin/payments");
+  for (const text of ["Neo", who.customerPhone, "Rami K", "mark 3 tickets paid"]) expect(queue, text).toContain(text);
+  expect(await get("/admin/orders")).toContain("1 / 3");
+  const detail = await get(`/admin/orders/${order.id}`);
+  expect(detail).toContain("Cash at door");
+  expect(detail).toContain("the rest was already paid at the door");
+  const csv = await get(`/admin/events/${event.eventId}/attendees.csv`);
+  expect(csv.split("\r\n")[0]).toContain("paid,price");
+  expect(csv).toContain('"cash","20.00"');
+  expect(csv).toContain('"unpaid","20.00"');
+  const stats = await get(`/admin/events/${event.eventId}/stats`);
+  expect(stats).toContain("still to collect");
+
+  const approved = await post(`/admin/orders/${order.id}/approve`, {});
+  expect(decodeURIComponent(approved.headers.get("location")!.replaceAll("+", " "))).toContain("2 tickets marked paid");
+
+  const other = await orders.confirm(event.slug, buyer(event.waveIds[0]!), T0);
+  expect((await post(`/admin/orders/${other.id}/cancel`, { reason: "" })).headers.get("location")).toContain("err=");
+  const cancelled = await post(`/admin/orders/${other.id}/cancel`, { reason: "No-show" });
+  expect(cancelled.status).toBe(303);
+  expect((await orders.getById(other.id))!.status).toBe("CANCELLED");
+});

@@ -128,7 +128,8 @@
 
   // After a POST is sent: show the pressed button as busy and stop double-submits.
   document.addEventListener("submit", (e) => {
-    if (e.defaultPrevented || (e.target.method || "").toLowerCase() === "get") return;
+    // Read the attribute: a field named "method" (the Whish/Neo choice) shadows form.method.
+    if (e.defaultPrevented || (e.target.getAttribute("method") || "").toLowerCase() === "get") return;
     const pressed = e.submitter;
     if (pressed) {
       pressed.classList.add("busy");

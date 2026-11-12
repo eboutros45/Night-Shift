@@ -467,6 +467,8 @@ const Stubs: FC<{ o: Loaded; svgs: string[] }> = ({ o, svgs }) => {
             {t.status !== "REVOKED" &&
               (t.paidAt !== null ? (
                 <span class="paytag paid">{t.priceCents === 0 ? "Free entry" : `Paid · ${PAY_LABEL[t.paidVia ?? ""] ?? "verified"}`}</span>
+              ) : o.status === "PENDING_VERIFICATION" ? (
+                <span class="paytag wait">Checking your payment · {money(t.priceCents)}</span>
               ) : (
                 <span class="paytag due">Not paid yet · {money(t.priceCents)}</span>
               ))}

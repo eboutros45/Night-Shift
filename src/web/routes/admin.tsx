@@ -369,7 +369,7 @@ async function EventPage(props: {
           </span>
         </div>
         <p class="small muted" style="padding:6px 22px 0;margin:0">
-          Held counts paid, pending and unexpired unpaid holds. Buyers see waves top to bottom.
+          Held counts every confirmed ticket, paid or not. Guests see waves top to bottom.
         </p>
         <div class="scroll" style="margin-top:8px;overflow:visible">
           <table>
@@ -459,7 +459,7 @@ async function EventPage(props: {
             <h2>Artwork</h2>
             <Flyer event={ev} acts={events.lineupOf(ev).map((l) => l.name)} />
             <p class="small muted" style="margin:12px 0">
-              {ev.posterKey ? "Your uploaded poster." : "No poster uploaded, so buyers see this generated flyer. Upload a 4:5 image to replace it."}
+              {ev.posterKey ? "Your uploaded poster." : "No poster uploaded, so guests see this generated flyer. Upload a 4:5 image to replace it."}
             </p>
             <form method="post" action={`${base}/poster`} enctype="multipart/form-data" class="fields">
               <label class="drop">

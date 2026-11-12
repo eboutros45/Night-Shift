@@ -144,7 +144,8 @@ form.inline input,form.inline select{width:auto}
 .mark{font-stretch:62%;font-weight:900;text-transform:uppercase;font-size:1.65rem;letter-spacing:-.01em;line-height:1;text-decoration:none;color:var(--bone);white-space:nowrap}
 .mark span{color:var(--sodium);margin:0 .04em}
 .pub-nav{display:flex;gap:22px;margin-left:auto;align-items:center;font-size:.95rem}
-.pub-nav a{text-decoration:none;color:var(--fog)}
+.pub-nav a{text-decoration:none;color:var(--fog);white-space:nowrap}
+@media(max-width:420px){.pub-nav{gap:16px;font-size:.9rem}}
 .pub-nav a:hover,.pub-nav a.on{color:var(--bone)}
 main{flex:1}
 .pub-main{padding:28px 0 96px}
@@ -188,7 +189,7 @@ main{flex:1}
 .facts li{display:grid;grid-template-columns:22px 1fr;gap:12px;align-items:start}
 .facts svg{margin-top:3px;color:var(--fog)}
 .facts strong{display:block}
-.block{border-top:1px solid var(--line);padding-top:24px;margin-top:40px}
+section.block{border-top:1px solid var(--line);padding-top:24px;margin-top:40px}
 .timetable{display:grid;margin:0;padding:0;list-style:none}
 .timetable li{display:grid;grid-template-columns:72px 1fr auto;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);align-items:baseline}
 .timetable li:last-child{border-bottom:0}
@@ -259,6 +260,7 @@ main{flex:1}
 .paytag{display:inline-block;padding:5px 12px;border-radius:999px;font-size:.8rem;font-weight:700;border:1.5px solid}
 .paytag.paid{color:#1e6b2a;background:#1e6b2a14}
 .paytag.due{color:#8a4b00;background:#ffb23833}
+.paytag.wait{color:#2b3f8f;background:#2b3f8f14}
 .countdown{font-variant-numeric:tabular-nums;font-weight:700}
 .countdown.urgent{color:var(--bad)}
 
@@ -343,7 +345,8 @@ table.kv th{width:40%;font-size:.84rem;color:var(--fog);font-weight:500;white-sp
 .bar i{display:block;height:100%;background:var(--bone)}
 .bar.hot i{background:var(--sodium)}
 .big{font-stretch:62%;font-weight:900;font-size:2.4rem;line-height:1}
-.data{max-width:340px;word-break:break-all;color:var(--fog);font-size:.75rem;font-family:var(--mono)}
+.data summary{cursor:pointer;list-style:none}.data details[open] summary{display:none}
+.data{min-width:240px;max-width:340px;word-break:break-all;color:var(--fog);font-size:.75rem;font-family:var(--mono)}
 details>summary{cursor:pointer;list-style:none}
 details>summary::-webkit-details-marker{display:none}
 .thumb{width:56px;flex:none}
@@ -565,7 +568,18 @@ export const Timeline: FC<{ rows: TimelineRow[]; customerView?: boolean }> = ({ 
             <td class="small">
               {customerView ? (r.actor === "customer" ? "You" : r.actor === "system" ? "System" : config.brand.name) : r.actorName}
             </td>
-            {!customerView && <td class="data">{r.data ?? ""}</td>}
+            {!customerView && (
+              <td class="data">
+                {(r.data ?? "").length > 90 ? (
+                  <details>
+                    <summary>{r.data!.slice(0, 60)}…</summary>
+                    {r.data}
+                  </details>
+                ) : (
+                  r.data ?? ""
+                )}
+              </td>
+            )}
           </tr>
         ))}
       </tbody>
